@@ -1,0 +1,246 @@
+@rendermode InteractiveServer
+@using HnHMapperServer.Core.DTOs
+@using HnHMapperServer.Web.Services
+@using TenantUserDto = HnHMapperServer.Core.DTOs.TenantUserDto
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject TenantContextService TenantContext
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ILogger<UserManagement> Logger
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="4">
+        <div class="d-flex justify-space-between align-center">
+        <MudText Typo="Typo.h5">
+            <MudIcon Icon="@Icons.Material.Filled.People" Class="me-2" />
+            Tenant Users
+        </MudText>
+        <MudButton Variant="Variant.Filled"
+                  Color="Color.Primary"
+                  StartIcon="@Icons.Material.Filled.Refresh"
+                  OnClick="LoadUsers"
+                  Disabled="@isLoading">
+            Refresh
+        </MudButton>
+    </div>
+
+    <MudDataGrid T="TenantUserDto" Items="@users" Loading="@isLoading" Filterable="true" SortMode="SortMode.Multiple" Hover="true">
+        <Columns>
+            <PropertyColumn Property="x => x.Username" Title="Username" />
+            <TemplateColumn Title="Role">
+                <CellTemplate>
+                    <MudChip Size="Size.Small" Color="@GetRoleColor(context.Item.Role)">
+                        @context.Item.Role
+                    </MudChip>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Permissions">
+                <CellTemplate>
+                    <MudStack Row="true" Spacing="1">
+                        @foreach (var permission in context.Item.Permissions)
+                        {
+                            <MudChip Size="Size.Small" Color="GetPermissionColor(permission)">@permission</MudChip>
+                        }
+                    </MudStack>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Status">
+                <CellTemplate>
+                    @if (context.Item.PendingApproval)
+                    {
+                        <MudChip Size="Size.Small" Color="Color.Warning">Pending</MudChip>
+                    }
+                    else
+                    {
+                        <MudChip Size="Size.Small" Color="Color.Success">Active</MudChip>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Actions">
+                <CellTemplate>
+                    <MudStack Row="true" Spacing="1">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small"
+                                       Color="Color.Primary"
+                                       OnClick="@(() => ShowEditUserPermissionsDialog(context.Item))"
+                                       Disabled="@context.Item.PendingApproval"
+                                       Title="@(context.Item.PendingApproval ? "Approve user first" : "Edit permissions")" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small"
+                                       Color="Color.Error"
+                                       OnClick="@(() => ShowRemoveUserDialog(context.Item))"
+                                       Title="Remove user from organization" />
+                    </MudStack>
+                </CellTemplate>
+            </TemplateColumn>
+        </Columns>
+    </MudDataGrid>
+    </MudStack>
+</MudPaper>
+
+@code {
+    private List<TenantUserDto> users = new();
+    private bool isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUsers();
+    }
+
+    private async Task LoadUsers()
+    {
+        isLoading = true;
+        try
+        {
+            var tenantId = TenantContext.CurrentTenant?.Id;
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                // Get TenantId from user claims
+                var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+                tenantId = authState.User.FindFirst(HnHMapperServer.Core.Constants.AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+
+                Logger.LogInformation("Got tenant ID from claims: {TenantId}", tenantId);
+            }
+
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                Snackbar.Add("Unable to determine your tenant. Please contact support.", Severity.Error);
+                Logger.LogError("Unable to determine tenant ID for user");
+                return;
+            }
+
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync($"/api/tenants/{tenantId}/users");
+
+            if (response.IsSuccessStatusCode)
+            {
+                // Filter out pending users (they appear in Pending Users tab)
+                var allUsers = await response.Content.ReadFromJsonAsync<List<TenantUserDto>>() ?? new();
+                users = allUsers.Where(u => !u.PendingApproval).ToList();
+                Logger.LogInformation("Loaded {Count} users for tenant {TenantId}", users.Count, tenantId);
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                Snackbar.Add("You are not authorized to view users.", Severity.Error);
+                users = new();
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to load users: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add($"Failed to load users: {response.StatusCode}", Severity.Error);
+                users = new();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading users");
+            Snackbar.Add($"Error loading users: {ex.Message}", Severity.Error);
+            users = new();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private Color GetRoleColor(string role)
+    {
+        return role switch
+        {
+            "TenantAdmin" => Color.Error,
+            "TenantUser" => Color.Primary,
+            _ => Color.Default
+        };
+    }
+
+    private Color GetPermissionColor(string permission)
+    {
+        return permission switch
+        {
+            "Map" => Color.Primary,
+            "Upload" => Color.Success,
+            "Writer" => Color.Info,
+            "Pointer" => Color.Secondary,
+            "Markers" => Color.Tertiary,
+            _ => Color.Default
+        };
+    }
+
+    private async Task ShowEditUserPermissionsDialog(TenantUserDto user)
+    {
+        var tenantId = TenantContext.CurrentTenant?.Id;
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            var tenants = await TenantContext.GetTenantsAsync();
+            tenantId = tenants.FirstOrDefault()?.Id;
+        }
+
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            Snackbar.Add("No tenant context available", Severity.Error);
+            return;
+        }
+
+        var parameters = new DialogParameters<EditUserPermissionsDialog>
+        {
+            { x => x.User, user },
+            { x => x.TenantId, tenantId }
+        };
+
+        var dialog = await DialogService.ShowAsync<EditUserPermissionsDialog>(
+            "Edit User Permissions",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            // Reload the user list to reflect updated permissions
+            await LoadUsers();
+        }
+    }
+
+    private async Task ShowRemoveUserDialog(TenantUserDto user)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Remove User",
+            $"Are you sure you want to remove '{user.Username}' from this organization? This will revoke their tokens and remove all their permissions.",
+            yesText: "Remove",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            var tenantId = TenantContext.CurrentTenant?.Id;
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                var tenants = await TenantContext.GetTenantsAsync();
+                tenantId = tenants.FirstOrDefault()?.Id;
+            }
+
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                Snackbar.Add("No tenant context available", Severity.Error);
+                return;
+            }
+
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.DeleteAsync($"/api/tenants/{tenantId}/users/{user.UserId}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"User '{user.Username}' removed successfully", Severity.Success);
+                await LoadUsers();
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to remove user: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add($"Failed to remove user: {response.StatusCode}", Severity.Error);
+            }
+        }
+    }
+}

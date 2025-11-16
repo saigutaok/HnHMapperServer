@@ -1,0 +1,147 @@
+@using HnHMapperServer.Core.DTOs
+@using MudBlazor
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject ILogger<EditTenantDialog> Logger
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">Edit Tenant: @Tenant?.Name</MudText>
+
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_tenantName"
+                          Label="Tenant Name"
+                          Variant="Variant.Outlined"
+                          Required="true"
+                          HelperText="Display name for this tenant" />
+
+            <MudNumericField @bind-Value="_storageQuotaMB"
+                             Label="Storage Quota (MB)"
+                             Variant="Variant.Outlined"
+                             Min="0"
+                             Step="100"
+                             Required="true"
+                             HelperText="Maximum storage allowed in megabytes"
+                             Adornment="Adornment.End"
+                             AdornmentText="MB" />
+
+            <MudSwitch @bind-Value="_isActive"
+                       Color="Color.Primary"
+                       Label="@(_isActive ? "Active" : "Suspended")"
+                       ThumbIcon="@(_isActive ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Block)">
+                <MudText Typo="Typo.body2" Class="mt-1">
+                    @if (_isActive)
+                    {
+                        <text>Tenant is <strong class="text-success">active</strong> - users can access the system</text>
+                    }
+                    else
+                    {
+                        <text>Tenant is <strong class="text-error">suspended</strong> - users cannot access the system</text>
+                    }
+                </MudText>
+            </MudSwitch>
+        </MudStack>
+
+        @if (string.IsNullOrWhiteSpace(_tenantName))
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                Tenant name is required.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="SaveTenant"
+                   Disabled="@(string.IsNullOrWhiteSpace(_tenantName) || _isSaving)">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ms-2">Saving...</MudText>
+            }
+            else
+            {
+                <MudText>Save Changes</MudText>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public TenantListDto? Tenant { get; set; }
+
+    private string _tenantName = string.Empty;
+    private int _storageQuotaMB = 1024;
+    private bool _isActive = true;
+    private bool _isSaving = false;
+
+    protected override void OnParametersSet()
+    {
+        if (Tenant != null)
+        {
+            // Pre-fill with current values
+            _tenantName = Tenant.Name;
+            _storageQuotaMB = Tenant.StorageQuotaMB;
+            _isActive = Tenant.IsActive;
+        }
+    }
+
+    private void Cancel()
+    {
+        MudDialog?.Cancel();
+    }
+
+    private async Task SaveTenant()
+    {
+        if (Tenant == null)
+        {
+            Snackbar.Add("Invalid tenant", Severity.Error);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_tenantName))
+        {
+            Snackbar.Add("Tenant name is required", Severity.Error);
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var request = new
+            {
+                name = _tenantName,
+                storageQuotaMB = _storageQuotaMB,
+                isActive = _isActive
+            };
+
+            var response = await httpClient.PutAsJsonAsync(
+                $"/api/superadmin/tenants/{Tenant.Id}",
+                request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Tenant '{_tenantName}' updated successfully", Severity.Success);
+                MudDialog?.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to update tenant: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add($"Failed to update tenant: {response.StatusCode}", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error updating tenant {TenantId}", Tenant.Id);
+            Snackbar.Add($"Error updating tenant: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+}

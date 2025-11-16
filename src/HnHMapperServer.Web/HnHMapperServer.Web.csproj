@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MudBlazor" Version="8.13.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HnHMapperServer.ServiceDefaults\HnHMapperServer.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\HnHMapperServer.Services\HnHMapperServer.Services.csproj" />
+    <ProjectReference Include="..\HnHMapperServer.Infrastructure\HnHMapperServer.Infrastructure.csproj" />
+    <ProjectReference Include="..\HnHMapperServer.Core\HnHMapperServer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="map\" />
+  </ItemGroup>
+
+</Project>

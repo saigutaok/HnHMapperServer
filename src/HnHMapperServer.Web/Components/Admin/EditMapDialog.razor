@@ -1,0 +1,164 @@
+@using HnHMapperServer.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="name"
+                          Label="Map Name"
+                          Variant="Variant.Outlined"
+                          Required="true"
+                          Immediate="true"
+                          HelperText="The display name of the map" />
+
+            <MudSwitch @bind-Value="hidden"
+                       Label="Hidden"
+                       Color="Color.Warning"
+                       ThumbIcon="@(hidden ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                       ThumbIconColor="@(hidden ? Color.Warning : Color.Success)">
+                Hide this map from normal users
+            </MudSwitch>
+
+            <MudNumericField @bind-Value="priority"
+                             Label="Priority"
+                             Variant="Variant.Outlined"
+                             Min="0"
+                             Step="1"
+                             HelperText="Maps are sorted by priority (lower first), then by name" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="@(string.IsNullOrWhiteSpace(name) || isProcessing)">
+            @if (isProcessing)
+            {
+                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ms-2">Saving...</MudText>
+            }
+            else
+            {
+                <MudText>Save Changes</MudText>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance? MudDialog { get; set; }
+
+    [Parameter]
+    public int MapId { get; set; }
+
+    [Parameter]
+    public string CurrentName { get; set; } = string.Empty;
+
+    [Parameter]
+    public bool CurrentHidden { get; set; }
+
+    [Parameter]
+    public int CurrentPriority { get; set; }
+
+    private string name = string.Empty;
+    private bool hidden = false;
+    private int priority = 0;
+    private bool isProcessing = false;
+
+    /// <summary>
+    /// Initialize the dialog with current map values.
+    /// </summary>
+    protected override void OnInitialized()
+    {
+        name = CurrentName;
+        hidden = CurrentHidden;
+        priority = CurrentPriority;
+    }
+
+    /// <summary>
+    /// Cancel the dialog without making changes.
+    /// </summary>
+    private void Cancel()
+    {
+        MudDialog?.Cancel();
+    }
+
+    /// <summary>
+    /// Submit the changes to the API.
+    /// </summary>
+    private async Task Submit()
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            Snackbar.Add("Map name cannot be empty", Severity.Error);
+            return;
+        }
+
+        if (priority < 0)
+        {
+            Snackbar.Add("Priority must be >= 0", Severity.Error);
+            return;
+        }
+
+        isProcessing = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var hasChanges = false;
+
+            // Check if name changed
+            if (name.Trim() != CurrentName.Trim())
+            {
+                var renameRequest = new RenameMapRequest { Name = name.Trim() };
+                var renameResponse = await httpClient.PutAsJsonAsync($"/admin/maps/{MapId}/rename", renameRequest);
+
+                if (!renameResponse.IsSuccessStatusCode)
+                {
+                    var errorContent = await renameResponse.Content.ReadAsStringAsync();
+                    Snackbar.Add($"Failed to rename map: {errorContent}", Severity.Error);
+                    return;
+                }
+                hasChanges = true;
+            }
+
+            // Check if hidden or priority changed
+            if (hidden != CurrentHidden || priority != CurrentPriority)
+            {
+                var settingsRequest = new { Hidden = hidden, Priority = priority };
+                var settingsResponse = await httpClient.PutAsJsonAsync($"/admin/maps/{MapId}/settings", settingsRequest);
+
+                if (!settingsResponse.IsSuccessStatusCode)
+                {
+                    var errorContent = await settingsResponse.Content.ReadAsStringAsync();
+                    Snackbar.Add($"Failed to update map settings: {errorContent}", Severity.Error);
+                    return;
+                }
+                hasChanges = true;
+            }
+
+            if (hasChanges)
+            {
+                Snackbar.Add("Map updated successfully", Severity.Success);
+                MudDialog?.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                Snackbar.Add("No changes made", Severity.Info);
+                MudDialog?.Close(DialogResult.Ok(false));
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Network error: {ex.Message}", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to update map: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+}
+

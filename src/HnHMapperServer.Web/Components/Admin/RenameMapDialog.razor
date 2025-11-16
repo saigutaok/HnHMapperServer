@@ -1,0 +1,118 @@
+@using HnHMapperServer.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="newName"
+                      Label="Map Name"
+                      Variant="Variant.Outlined"
+                      Required="true"
+                      Immediate="true"
+                      HelperText="Enter the new name for this map" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit" Disabled="@(string.IsNullOrWhiteSpace(newName) || isProcessing)">
+            @if (isProcessing)
+            {
+                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ms-2">Saving...</MudText>
+            }
+            else
+            {
+                <MudText>Rename</MudText>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance? MudDialog { get; set; }
+
+    [Parameter]
+    public int MapId { get; set; }
+
+    [Parameter]
+    public string CurrentName { get; set; } = string.Empty;
+
+    private string newName = string.Empty;
+    private bool isProcessing = false;
+
+    /// <summary>
+    /// Initialize the dialog with the current map name.
+    /// </summary>
+    protected override void OnInitialized()
+    {
+        newName = CurrentName;
+    }
+
+    /// <summary>
+    /// Cancel the dialog without making changes.
+    /// </summary>
+    private void Cancel()
+    {
+        MudDialog?.Cancel();
+    }
+
+    /// <summary>
+    /// Submit the rename request to the API.
+    /// </summary>
+    private async Task Submit()
+    {
+        if (string.IsNullOrWhiteSpace(newName))
+        {
+            Snackbar.Add("Map name cannot be empty", Severity.Error);
+            return;
+        }
+
+        // Check if name actually changed
+        if (newName.Trim() == CurrentName.Trim())
+        {
+            Snackbar.Add("Name unchanged", Severity.Info);
+            MudDialog?.Close(DialogResult.Ok(true));
+            return;
+        }
+
+        isProcessing = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var request = new RenameMapRequest { Name = newName.Trim() };
+            var response = await httpClient.PutAsJsonAsync($"/admin/maps/{MapId}/rename", request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Map renamed to '{newName.Trim()}'", Severity.Success);
+                MudDialog?.Close(DialogResult.Ok(true));
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Snackbar.Add("Map not found", Severity.Error);
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.BadRequest)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                Snackbar.Add($"Invalid request: {errorContent}", Severity.Error);
+            }
+            else
+            {
+                Snackbar.Add($"Failed to rename map: {response.StatusCode}", Severity.Error);
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Network error: {ex.Message}", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to rename map: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+}
+

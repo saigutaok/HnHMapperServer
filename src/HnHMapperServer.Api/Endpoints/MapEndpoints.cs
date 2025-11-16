@@ -1,0 +1,866 @@
+using HnHMapperServer.Core.Interfaces;
+using HnHMapperServer.Core.Enums;
+using HnHMapperServer.Core.Models;
+using HnHMapperServer.Services.Interfaces;
+using HnHMapperServer.Services.Services;
+using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+using System.Text;
+using HnHMapperServer.Core.DTOs;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Core.Features;
+using Microsoft.EntityFrameworkCore;
+using HnHMapperServer.Core.Extensions;
+using HnHMapperServer.Core.Constants;
+
+namespace HnHMapperServer.Api.Endpoints;
+
+/// <summary>
+/// Map frontend API endpoints
+/// Matches Go implementation routes: /map/api/*
+/// </summary>
+public static class MapEndpoints
+{
+    public static void MapMapEndpoints(this IEndpointRouteBuilder app)
+    {
+        var group = app.MapGroup("/map/api")
+            .RequireAuthorization("TenantMapAccess"); // Require Map permission for map APIs
+
+        group.MapGet("/v1/characters", GetCharacters);
+        group.MapGet("/v1/markers", GetMarkers);
+        group.MapGet("/config", GetConfig);
+        group.MapGet("/maps", GetMaps);
+        group.MapPost("/admin/wipeTile", WipeTile);
+        group.MapPost("/admin/setCoords", SetCoords);
+        group.MapPost("/admin/hideMarker", HideMarker);
+        group.MapPost("/admin/deleteMarker", DeleteMarker);
+
+        app.MapGet("/map/updates", WatchGridUpdates).RequireAuthorization("TenantMapAccess");
+        app.MapGet("/map/grids/{**path}", ServeGridTile)
+            .RequireAuthorization("TenantMapAccess")
+            .CacheOutput(policy => policy
+                .Expire(TimeSpan.FromSeconds(60))  // In-memory cache for 60 seconds
+                .SetVaryByQuery("v", "cache")      // Vary by revision and cache-bust params
+                .SetVaryByRouteValue("path")       // Vary by tile path (mapId/zoom/x_y)
+                .Tag("tiles"));                     // Tag for bulk invalidation if needed
+    }
+
+    private static bool HasPermission(ClaimsPrincipal user, Permission permission)
+    {
+        // SuperAdmin bypasses all permission checks
+        if (user.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+            return true;
+
+        var permissionValue = permission.ToClaimValue();
+        return user.Claims.Any(c =>
+            c.Type == AuthorizationConstants.ClaimTypes.TenantPermission &&
+            c.Value.Equals(permissionValue, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IResult GetCharacters(
+        HttpContext context,
+        ICharacterService characterService,
+        ILogger<Program> logger)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Map permission already enforced by TenantMapAccess policy
+
+        // If no Pointer permission, return empty array instead of 401
+        if (!HasPermission(context.User, Permission.Pointer))
+            return Results.Json(new List<object>());
+
+        // Extract tenant ID from context (set by TenantContextMiddleware)
+        var tenantId = context.Items["TenantId"] as string ?? string.Empty;
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            logger.LogWarning("GetCharacters: No tenant ID in context");
+            return Results.Unauthorized();
+        }
+
+        var characters = characterService.GetAllCharacters(tenantId);
+
+        // Diagnostic: log when user has proper auth but no characters are available
+        if (characters.Count == 0)
+        {
+            logger.LogDebug("GetCharacters returned 0 characters for tenant {TenantId}. User has Map+Pointer auth but no active positions. Likely causes: (1) No grids registered yet (client must send gridUpdate first), (2) All characters older than 10s (cleaned by CharacterCleanupService), (3) Client not sending positionUpdate.", tenantId);
+        }
+
+        return Results.Json(characters);
+    }
+
+    private static async Task<IResult> GetMarkers(
+        HttpContext context,
+        IMarkerService markerService)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Map permission already enforced by TenantMapAccess policy
+
+        // If no Markers permission, return empty array instead of 401
+        if (!HasPermission(context.User, Permission.Markers))
+            return Results.Json(new List<object>());
+
+        var markers = await markerService.GetAllFrontendMarkersAsync();
+        return Results.Json(markers);
+    }
+
+    private static async Task<IResult> GetConfig(
+        HttpContext context,
+        IConfigRepository configRepository,
+        HnHMapperServer.Infrastructure.Data.ApplicationDbContext db,
+        ILogger<Program> logger)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Authorization already enforced by TenantMapAccess policy
+        // Legacy HasAuth check removed - no longer needed with multi-tenancy
+
+        // Get permissions from current tenant
+        var tenantId = context.User.FindFirst(AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+        var userId = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var username = context.User.Identity?.Name ?? "(unknown)";
+
+        var permissions = Array.Empty<string>();
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            logger.LogWarning("User {Username} ({UserId}) has no TenantId claim. Tenant selection may not have completed.", username, userId);
+            logger.LogWarning("Available claims ({Count}):", context.User.Claims.Count());
+            foreach (var claim in context.User.Claims)
+            {
+                logger.LogWarning("  Claim: {Type} = {Value}", claim.Type, claim.Value);
+            }
+        }
+        else if (string.IsNullOrEmpty(userId))
+        {
+            logger.LogWarning("User {Username} has no UserId claim. This should not happen.", username);
+        }
+        else
+        {
+            var tenantUser = await db.TenantUsers
+                .IgnoreQueryFilters()
+                .Include(tu => tu.Permissions)
+                .FirstOrDefaultAsync(tu => tu.UserId == userId && tu.TenantId == tenantId);
+
+            if (tenantUser == null)
+            {
+                logger.LogWarning("User {Username} ({UserId}) not found in TenantUsers for tenant {TenantId}", username, userId, tenantId);
+            }
+            else
+            {
+                permissions = tenantUser.Permissions
+                    .Select(p => p.Permission.ToClaimValue())
+                    .ToArray();
+                logger.LogInformation("User {Username} in tenant {TenantId} has {Count} permissions: {Permissions}",
+                    username, tenantId, permissions.Length, string.Join(", ", permissions));
+            }
+        }
+
+        var config = await configRepository.GetConfigAsync();
+        var response = new
+        {
+            Title = config.Title,
+            Permissions = permissions,
+            MainMapId = config.MainMapId
+        };
+
+        return Results.Json(response);
+    }
+
+    private static async Task<IResult> GetMaps(
+        HttpContext context,
+        IMapRepository mapRepository,
+        IConfigRepository configRepository,
+        HnHMapperServer.Api.Services.MapRevisionCache revisionCache)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Map permission already enforced by TenantMapAccess policy
+
+        var config = await configRepository.GetConfigAsync();
+        var maps = await mapRepository.GetAllMapsAsync();
+        var visibleMaps = maps.Where(m => !m.Hidden)
+            .OrderByDescending(m => m.Priority)  // Higher priority first (e.g., 1, 0, -1)
+            .ThenBy(m => m.Name)
+            .Select(m => new
+            {
+                ID = m.Id,
+                MapInfo = new
+                {
+                    Name = m.Name,
+                    Hidden = m.Hidden,
+                    Priority = m.Priority,
+                    Revision = revisionCache.Get(m.Id),  // Include current revision for initial cache setup
+                    IsMainMap = config.MainMapId.HasValue && config.MainMapId.Value == m.Id
+                },
+                Size = 0  // Size not used in frontend, set to 0
+            })
+            .ToList();
+
+        return Results.Json(visibleMaps);
+    }
+
+    private static async Task<IResult> WipeTile(
+        HttpContext context,
+        [FromBody] WipeTileRequest request,
+        IGridService gridService,
+        TileCacheService tileCacheService,
+        IConfiguration configuration,
+        HnHMapperServer.Api.Services.MapRevisionCache revisionCache,
+        IUpdateNotificationService updateNotificationService,
+        ILogger<Program> logger)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Require Writer permission (SuperAdmin bypasses automatically)
+        if (!HasPermission(context.User, Permission.Writer))
+            return Results.Unauthorized();
+
+        var gridStorage = configuration["GridStorage"] ?? "map";
+        await gridService.DeleteMapTileAsync(request.map, new Core.Models.Coord(request.x, request.y), gridStorage);
+
+        // Bump map revision and notify clients to invalidate cache
+        var newRevision = revisionCache.Increment(request.map);
+        updateNotificationService.NotifyMapRevision(request.map, newRevision);
+        logger.LogDebug("WipeTile: Bumped revision for map {MapId} to {Revision}", request.map, newRevision);
+
+        // Invalidate tile cache for current tenant (tile was deleted - SSE clients need fresh data)
+        var tenantId = context.Items["TenantId"] as string;
+        await tileCacheService.InvalidateCacheAsync(tenantId);
+
+        return Results.Ok();
+    }
+
+    private static async Task<IResult> SetCoords(
+        HttpContext context,
+        [FromBody] SetCoordsRequest request,
+        IGridService gridService,
+        TileCacheService tileCacheService,
+        IConfiguration configuration,
+        HnHMapperServer.Api.Services.MapRevisionCache revisionCache,
+        IUpdateNotificationService updateNotificationService,
+        ILogger<Program> logger)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Require Writer permission (SuperAdmin bypasses automatically)
+        if (!HasPermission(context.User, Permission.Writer))
+            return Results.Unauthorized();
+
+        var gridStorage = configuration["GridStorage"] ?? "map";
+        await gridService.SetCoordinatesAsync(
+            request.map,
+            new Core.Models.Coord(request.fx, request.fy),
+            new Core.Models.Coord(request.tx, request.ty),
+            gridStorage);
+
+        // Bump map revision and notify clients to invalidate cache
+        var newRevision = revisionCache.Increment(request.map);
+        updateNotificationService.NotifyMapRevision(request.map, newRevision);
+        logger.LogDebug("SetCoords: Bumped revision for map {MapId} to {Revision}", request.map, newRevision);
+
+        // Invalidate tile cache for current tenant (coordinates changed - SSE clients need fresh data)
+        var tenantId = context.Items["TenantId"] as string;
+        await tileCacheService.InvalidateCacheAsync(tenantId);
+
+        return Results.Ok();
+    }
+
+    private static async Task<IResult> HideMarker(
+        HttpContext context,
+        [FromBody] MarkerIdRequest request,
+        IMarkerService markerService)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Require Writer permission (SuperAdmin bypasses automatically)
+        if (!HasPermission(context.User, Permission.Writer))
+            return Results.Unauthorized();
+
+        await markerService.HideMarkerAsync(request.id);
+        return Results.Ok();
+    }
+
+    private static async Task<IResult> DeleteMarker(
+        HttpContext context,
+        [FromBody] MarkerIdRequest request,
+        IMarkerService markerService)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Require Writer permission (SuperAdmin bypasses automatically)
+        if (!HasPermission(context.User, Permission.Writer))
+            return Results.Unauthorized();
+
+        await markerService.DeleteMarkerByIdAsync(request.id);
+        return Results.Ok();
+    }
+
+    private static async Task WatchGridUpdates(
+        HttpContext context,
+        IUpdateNotificationService updateNotificationService,
+        TileCacheService tileCacheService,
+        ICharacterService characterService,
+        HnHMapperServer.Api.Services.MapRevisionCache revisionCache,
+        IMapRepository mapRepository,
+        ILogger<Program> logger)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+        {
+            context.Response.StatusCode = 401;
+            return;
+        }
+
+        // Map permission already enforced by TenantMapAccess policy
+
+        // Check if user has Pointer permission for character updates
+        bool hasPointerAuth = HasPermission(context.User, Permission.Pointer);
+
+        context.Response.ContentType = "text/event-stream; charset=utf-8";
+        context.Response.Headers.Append("Cache-Control", "no-cache");
+        context.Response.Headers.Append("X-Accel-Buffering", "no");
+        context.Response.Headers.Append("Connection", "keep-alive");
+
+        // Disable Kestrel's MinResponseDataRate to prevent SSE connection timeout
+        // Without this, Kestrel will abort connections that don't send ~240 bytes/second
+        // SSE heartbeat sends only 15 bytes every 15 seconds, which would cause disconnection
+        var minResponseDataRateFeature = context.Features.Get<IHttpMinResponseDataRateFeature>();
+        if (minResponseDataRateFeature != null)
+        {
+            minResponseDataRateFeature.MinDataRate = null;
+        }
+
+        // Extract tenant ID from context (set by TenantContextMiddleware)
+        var tenantId = context.Items["TenantId"] as string ?? string.Empty;
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            logger.LogWarning("SSE: No tenant ID in context, cannot send tile cache");
+            context.Response.StatusCode = 401;
+            return;
+        }
+
+        // Send initial tile cache (from tenant-specific in-memory cache - prevents blocking database query)
+        // SECURITY: Tile cache is now tenant-scoped to prevent cross-tenant data leakage
+        var tenantTiles = await tileCacheService.GetAllTilesAsync(tenantId);
+        var tileCache = tenantTiles.Select(t => new TileCacheDto
+        {
+            M = t.MapId,
+            X = t.Coord.X,
+            Y = t.Coord.Y,
+            Z = t.Zoom,
+            T = (int)t.Cache
+        }).ToList();
+
+        logger.LogDebug("SSE: Sending {Count} tiles for tenant {TenantId}",
+            tileCache.Count, tenantId);
+
+        var initialData = JsonSerializer.Serialize(tileCache);
+        await context.Response.WriteAsync($"data: {initialData}\n\n");
+        await context.Response.Body.FlushAsync();
+
+        // Send initial map revisions so clients can display version and set cache-busting immediately
+        // SECURITY: Filter by tenant's maps to prevent cross-tenant data leakage
+        var tenantMaps = await mapRepository.GetAllMapsAsync();
+        var tenantMapIds = tenantMaps.Select(m => m.Id).ToHashSet();
+        var allRevisions = revisionCache.GetAll();
+        var tenantRevisions = allRevisions.Where(kv => tenantMapIds.Contains(kv.Key)).ToList();
+
+        logger.LogDebug("SSE: Sending {Count} map revisions for tenant {TenantId} (filtered from {Total} total cached)",
+            tenantRevisions.Count, tenantId, allRevisions.Count);
+
+        if (tenantRevisions.Count > 0)
+        {
+            foreach (var kv in tenantRevisions)
+            {
+                var irJson = JsonSerializer.Serialize(new { MapId = kv.Key, Revision = kv.Value });
+                await context.Response.WriteAsync($"event: mapRevision\ndata: {irJson}\n\n");
+            }
+            await context.Response.Body.FlushAsync();
+        }
+
+        // Send initial character snapshot if user has Pointer auth
+        if (hasPointerAuth)
+        {
+            // Use tenant ID already extracted above
+            var allCharacters = characterService.GetAllCharacters(tenantId);
+            logger.LogDebug("SSE: Sending character snapshot for tenant {TenantId} with {Count} characters", tenantId, allCharacters.Count);
+            if (allCharacters.Count > 0)
+            {
+                var first = allCharacters[0];
+                logger.LogWarning("SSE: First character - Id={Id}, Name={Name}, Map={Map}, Pos=({X},{Y}), Type={Type}",
+                    first.Id, first.Name, first.Map, first.Position.X, first.Position.Y, first.Type);
+            }
+            // Send characters in the same format as CharacterModel (nested Position)
+            // to match what the frontend expects
+            var snapshotJson = JsonSerializer.Serialize(allCharacters);
+            logger.LogWarning("SSE: Snapshot JSON length: {Length}", snapshotJson.Length);
+            await context.Response.WriteAsync($"event: charactersSnapshot\ndata: {snapshotJson}\n\n");
+            await context.Response.Body.FlushAsync();
+        }
+        else
+        {
+            logger.LogWarning("SSE: User lacks Pointer auth, not sending character snapshot");
+        }
+
+        // Subscribe to updates
+        var tileUpdates = updateNotificationService.SubscribeToTileUpdates();
+        var mergeUpdates = updateNotificationService.SubscribeToMergeUpdates();
+        var mapUpdates = updateNotificationService.SubscribeToMapUpdates();
+        var mapDeletes = updateNotificationService.SubscribeToMapDeletes();
+        var mapRevisions = updateNotificationService.SubscribeToMapRevisions();
+        var customMarkerCreated = updateNotificationService.SubscribeToCustomMarkerCreated();
+        var customMarkerUpdated = updateNotificationService.SubscribeToCustomMarkerUpdated();
+        var customMarkerDeleted = updateNotificationService.SubscribeToCustomMarkerDeleted();
+        var pingCreated = updateNotificationService.SubscribeToPingCreated();
+        var pingDeleted = updateNotificationService.SubscribeToPingDeleted();
+        var characterDeltas = hasPointerAuth ? updateNotificationService.SubscribeToCharacterDelta() : null;
+
+        var tileBatch = new List<TileCacheDto>();
+        // Character delta coalescing: accumulate latest state per character ID for 500ms batching
+        var characterDeltaBatch = new Dictionary<int, Character>(); // characterId -> latest state
+        var characterDeletions = new HashSet<int>(); // characterIds to delete
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+
+        logger.LogWarning("SSE: About to enter main event loop");
+
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500)); // 500ms for character updates
+            var idleTicks = 0; // number of ticks without any outgoing data
+            int ticksSinceLastTileBatch = 0; // track ticks since last tile batch (tiles batched every 10s = 20 ticks)
+
+            logger.LogWarning("SSE: Entering while loop, cancellation requested: {Cancelled}", cts.Token.IsCancellationRequested);
+
+            while (!cts.Token.IsCancellationRequested)
+            {
+                // Wait for next tick (500ms) FIRST to prevent infinite loop when channels are empty
+                // This guarantees a 500ms delay between iterations
+                await timer.WaitForNextTickAsync(cts.Token);
+                ticksSinceLastTileBatch++;
+
+                // Check for tile updates
+                // SECURITY: Filter by tenant to prevent cross-tenant data leakage
+                while (tileUpdates.TryRead(out var tileData))
+                {
+                    if (tileData.TenantId == tenantId)
+                    {
+                        tileBatch.Add(new TileCacheDto
+                        {
+                            M = tileData.MapId,
+                            X = tileData.Coord.X,
+                            Y = tileData.Coord.Y,
+                            Z = tileData.Zoom,
+                            T = (int)tileData.Cache
+                        });
+                    }
+                }
+
+                // Check for merge updates
+                // SECURITY: Filter by tenant to prevent cross-tenant merge confusion
+                while (mergeUpdates.TryRead(out var merge))
+                {
+                    if (merge.TenantId == tenantId)
+                    {
+                        var mergeJson = JsonSerializer.Serialize(merge);
+                        await context.Response.WriteAsync($"event: merge\ndata: {mergeJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for map metadata updates (rename, hidden, priority)
+                // SECURITY: Filter by tenant to prevent cross-tenant map updates
+                while (mapUpdates.TryRead(out var mapInfo))
+                {
+                    if (mapInfo.TenantId == tenantId)
+                    {
+                        var mapUpdateDto = new
+                        {
+                            Id = mapInfo.Id,
+                            Name = mapInfo.Name,
+                            Hidden = mapInfo.Hidden,
+                            Priority = mapInfo.Priority
+                        };
+                        var mapJson = JsonSerializer.Serialize(mapUpdateDto);
+                        await context.Response.WriteAsync($"event: mapUpdate\ndata: {mapJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for map deletions
+                // SECURITY: Filter by tenant - need to check if mapId belongs to tenant
+                while (mapDeletes.TryRead(out var mapId))
+                {
+                    // Check if this map belongs to the tenant
+                    if (tenantMapIds.Contains(mapId))
+                    {
+                        var deleteDto = new { Id = mapId };
+                        var deleteJson = JsonSerializer.Serialize(deleteDto);
+                        await context.Response.WriteAsync($"event: mapDelete\ndata: {deleteJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for map revision updates (cache busting)
+                // SECURITY: Filter by tenant - only send revisions for tenant's maps
+                while (mapRevisions.TryRead(out var revision))
+                {
+                    if (tenantMapIds.Contains(revision.MapId))
+                    {
+                        var revisionDto = new { MapId = revision.MapId, Revision = revision.Revision };
+                        var revisionJson = JsonSerializer.Serialize(revisionDto);
+                        await context.Response.WriteAsync($"event: mapRevision\ndata: {revisionJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for custom marker creation events
+                // SECURITY: Filter by tenant to prevent cross-tenant marker visibility
+                while (customMarkerCreated.TryRead(out var markerCreated))
+                {
+                    if (markerCreated.TenantId == tenantId)
+                    {
+                        var markerJson = JsonSerializer.Serialize(markerCreated);
+                        await context.Response.WriteAsync($"event: customMarkerCreated\ndata: {markerJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for custom marker update events
+                // SECURITY: Filter by tenant to prevent cross-tenant marker visibility
+                while (customMarkerUpdated.TryRead(out var markerUpdated))
+                {
+                    if (markerUpdated.TenantId == tenantId)
+                    {
+                        var markerJson = JsonSerializer.Serialize(markerUpdated);
+                        await context.Response.WriteAsync($"event: customMarkerUpdated\ndata: {markerJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for custom marker deletion events
+                // SECURITY: Filter by tenant to prevent cross-tenant marker visibility
+                while (customMarkerDeleted.TryRead(out var markerDeleteEvent))
+                {
+                    if (markerDeleteEvent.TenantId == tenantId)
+                    {
+                        var deleteDto = new { Id = markerDeleteEvent.Id };
+                        var deleteJson = JsonSerializer.Serialize(deleteDto);
+                        await context.Response.WriteAsync($"event: customMarkerDeleted\ndata: {deleteJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for ping creation events
+                // SECURITY: Filter by tenant to prevent cross-tenant ping visibility
+                while (pingCreated.TryRead(out var ping))
+                {
+                    if (ping.TenantId == tenantId)
+                    {
+                        var pingJson = JsonSerializer.Serialize(ping);
+                        await context.Response.WriteAsync($"event: pingCreated\ndata: {pingJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for ping deletion events
+                // SECURITY: Filter by tenant to prevent cross-tenant ping visibility
+                while (pingDeleted.TryRead(out var pingDeleteEvent))
+                {
+                    if (pingDeleteEvent.TenantId == tenantId)
+                    {
+                        var deleteDto = new { Id = pingDeleteEvent.Id };
+                        var deleteJson = JsonSerializer.Serialize(deleteDto);
+                        await context.Response.WriteAsync($"event: pingDeleted\ndata: {deleteJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for character delta events (coalesce updates)
+                if (characterDeltas != null)
+                {
+                    while (characterDeltas.TryRead(out var delta))
+                    {
+                        // SECURITY: Only process deltas for the current tenant
+                        if (delta.TenantId != tenantId)
+                        {
+                            continue; // Skip deltas from other tenants
+                        }
+
+                        // Coalesce updates: convert CharacterDto to Character format
+                        foreach (var update in delta.Updates)
+                        {
+                            var character = new Character
+                            {
+                                Id = update.Id,
+                                Name = update.Name,
+                                Map = update.Map,
+                                Position = new Position(update.X, update.Y),
+                                Type = update.Type,
+                                Rotation = update.Rotation,
+                                Speed = update.Speed,
+                                Updated = DateTime.UtcNow,
+                                TenantId = delta.TenantId  // Set TenantId from delta
+                            };
+
+                            // Diagnostic logging to trace position updates
+                            logger.LogDebug("SSE: Character {CharId} delta - Pos({X},{Y}), DeltaTenant={DeltaTenant}, ConnTenant={ConnTenant}",
+                                update.Id, update.X, update.Y, delta.TenantId, tenantId);
+
+                            characterDeltaBatch[update.Id] = character;
+                            // Remove from deletions if it was marked for deletion (resurrect)
+                            characterDeletions.Remove(update.Id);
+                        }
+
+                        // Track deletions
+                        foreach (var deletedId in delta.Deletions)
+                        {
+                            // Remove from updates if it was pending (delete wins)
+                            characterDeltaBatch.Remove(deletedId);
+                            characterDeletions.Add(deletedId);
+                        }
+                    }
+                }
+
+                bool sentData = false;
+
+                // Send character deltas every 500ms if there are any
+                if (characterDeltaBatch.Count > 0 || characterDeletions.Count > 0)
+                {
+                    logger.LogDebug("SSE: Sending character delta - {Updates} updates, {Deletions} deletions",
+                        characterDeltaBatch.Count, characterDeletions.Count);
+                    
+                    // Send in the same format as initial snapshot (Character with nested Position)
+                    var deltaPayload = new
+                    {
+                        Updates = characterDeltaBatch.Values.ToList(),
+                        Deletions = characterDeletions.ToList()
+                    };
+                    var deltaJson = JsonSerializer.Serialize(deltaPayload);
+                    await context.Response.WriteAsync($"event: characterDelta\ndata: {deltaJson}\n\n");
+                    await context.Response.Body.FlushAsync();
+                    
+                    characterDeltaBatch.Clear();
+                    characterDeletions.Clear();
+                    sentData = true;
+                }
+
+                // Send batched tile updates every 10 seconds (20 x 500ms ticks)
+                if (ticksSinceLastTileBatch >= 20)
+                {
+                    if (tileBatch.Count > 0)
+                    {
+                        var batchJson = JsonSerializer.Serialize(tileBatch);
+                        await context.Response.WriteAsync($"data: {batchJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                        tileBatch.Clear();
+                        sentData = true;
+                    }
+                    ticksSinceLastTileBatch = 0;
+                }
+
+                if (sentData)
+                {
+                    idleTicks = 0; // we sent data, reset idle counter
+                }
+                else
+                {
+                    // Heartbeat: keep the SSE connection alive even when there are no updates
+                    // Send a comment event every ~15 seconds (30 x 500ms ticks)
+                    idleTicks++;
+                    if (idleTicks % 30 == 0)
+                    {
+                        await context.Response.WriteAsync(": keep-alive\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+            }
+
+            logger.LogWarning("SSE: Exited while loop normally");
+        }
+        catch (OperationCanceledException ex)
+        {
+            logger.LogWarning("SSE: Cancelled - {Message}", ex.Message);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unhandled exception in SSE stream /map/updates");
+        }
+
+        logger.LogWarning("SSE: WatchGridUpdates method exiting");
+    }
+
+    private static async Task<IResult> ServeGridTile(
+        HttpContext context,
+        [FromRoute] string path,
+        ITileService tileService,
+        IConfiguration configuration)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Map permission already enforced by TenantMapAccess policy
+
+        // Extract tenant ID from context (set by token validation middleware)
+        var tenantId = context.Items["TenantId"] as string;
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        // Parse path: {mapId}/{zoom}/{x}_{y}.png
+        var parts = path.Split('/');
+        if (parts.Length != 3)
+            return Results.NotFound();
+
+        if (!int.TryParse(parts[0], out var mapId))
+            return Results.NotFound();
+
+        if (!int.TryParse(parts[1], out var zoom))
+            return Results.NotFound();
+
+        var coordPart = parts[2].Replace(".png", "");
+        var coords = coordPart.Split('_');
+        if (coords.Length != 2)
+            return Results.NotFound();
+
+        if (!int.TryParse(coords[0], out var x))
+            return Results.NotFound();
+
+        if (!int.TryParse(coords[1], out var y))
+            return Results.NotFound();
+
+        var gridStorage = configuration["GridStorage"] ?? "map";
+
+        string? filePath = null;
+
+        // Performance optimization: only query DB for zoom 0 tiles (which may be stored under grids/{gridId}.png)
+        // For zoom >= 1, tiles are always in the standard tenants/{tenantId}/{mapId}/{zoom}/{x}_{y}.png structure
+        if (zoom == 0)
+        {
+            // Try to get tile from database first
+            var tile = await tileService.GetTileAsync(mapId, new Core.Models.Coord(x, y), zoom);
+
+            if (tile != null)
+            {
+                // SECURITY: Verify tile belongs to current tenant (defense-in-depth)
+                if (tile.TenantId != tenantId)
+                {
+                    context.Response.StatusCode = 401;
+                    return Results.Unauthorized();
+                }
+
+                if (!string.IsNullOrEmpty(tile.File))
+                {
+                    // Tile found in database - use stored file path (already tenant-specific after migration)
+                    filePath = Path.Combine(gridStorage, tile.File);
+                }
+            }
+            else
+            {
+                // Fallback to direct file system lookup for zoom 0
+                // Tenant-specific path: tenants/{tenantId}/{mapId}/{zoom}/{x}_{y}.png
+                var tenantPath = Path.Combine(gridStorage, "tenants", tenantId, mapId.ToString(), zoom.ToString(), $"{x}_{y}.png");
+                if (File.Exists(tenantPath))
+                {
+                    filePath = tenantPath;
+                }
+            }
+        }
+        else
+        {
+            // For zoom >= 1, use tenant-specific path (generated tiles follow this pattern after Phase 4)
+            // Expected format: tenants/{tenantId}/{mapId}/{zoom}/{x}_{y}.png
+            var directPath = Path.Combine(gridStorage, "tenants", tenantId, mapId.ToString(), zoom.ToString(), $"{x}_{y}.png");
+            if (File.Exists(directPath))
+            {
+                filePath = directPath;
+            }
+        }
+
+        if (filePath == null || !File.Exists(filePath))
+        {
+            // Check if we should return a transparent PNG instead of 404 (reduces browser console noise)
+            var returnTransparentTile = configuration.GetValue<bool>("ReturnTransparentTilesOnMissing", false);
+            
+            if (returnTransparentTile)
+            {
+                // Return a minimal 1x1 transparent PNG (smallest valid PNG: 67 bytes)
+                // This eliminates browser console 404 errors while maintaining cache benefits
+                var transparentPng = new byte[] {
+                    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+                    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+                    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1 dimensions
+                    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+                    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, // IDAT chunk
+                    0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+                    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, // compressed data
+                    0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, // IEND chunk
+                    0x42, 0x60, 0x82
+                };
+                
+                context.Response.Headers.Append("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+                context.Response.ContentType = "image/png";
+                return Results.Bytes(transparentPng, "image/png");
+            }
+            else
+            {
+                // Standard 404 response with long cache to reduce repeated requests over unmapped areas (5 minutes)
+                context.Response.Headers.Append("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+                return Results.NotFound();
+            }
+        }
+
+        // Get file info for ETag and Last-Modified headers
+        var fileInfo = new FileInfo(filePath);
+        var lastModified = fileInfo.LastWriteTimeUtc;
+        var fileSize = fileInfo.Length;
+        
+        // Generate ETag from file length + last write time (simple but effective)
+        var etagValue = $"\"{fileSize}-{lastModified.Ticks}\"";
+        
+        // Check If-None-Match header (ETag conditional request)
+        var ifNoneMatch = context.Request.Headers["If-None-Match"].ToString();
+        if (!string.IsNullOrEmpty(ifNoneMatch) && ifNoneMatch == etagValue)
+        {
+            // Client has the same version, return 304 Not Modified
+            context.Response.StatusCode = StatusCodes.Status304NotModified;
+            context.Response.Headers.Append("ETag", etagValue);
+            context.Response.Headers.Append("Cache-Control", "public, max-age=31536000, immutable");
+            return Results.Empty;
+        }
+        
+        // Check If-Modified-Since header (date-based conditional request)
+        var ifModifiedSince = context.Request.Headers["If-Modified-Since"].ToString();
+        if (!string.IsNullOrEmpty(ifModifiedSince) && 
+            DateTime.TryParse(ifModifiedSince, out var ifModifiedSinceDate) &&
+            lastModified <= ifModifiedSinceDate.ToUniversalTime())
+        {
+            // File hasn't been modified, return 304 Not Modified
+            context.Response.StatusCode = StatusCodes.Status304NotModified;
+            context.Response.Headers.Append("Last-Modified", lastModified.ToString("R"));
+            context.Response.Headers.Append("Cache-Control", "public, max-age=31536000, immutable");
+            return Results.Empty;
+        }
+        
+        // Set caching headers for successful response
+        context.Response.Headers.Append("Cache-Control", "public, max-age=31536000, immutable");
+        context.Response.Headers.Append("ETag", etagValue);
+        context.Response.Headers.Append("Last-Modified", lastModified.ToString("R"));
+        
+        return Results.File(filePath, "image/png");
+    }
+
+    // Request DTOs for admin endpoints
+    private record WipeTileRequest(int map, int x, int y);
+    private record SetCoordsRequest(int map, int fx, int fy, int tx, int ty);
+    private record MarkerIdRequest(int id);
+}

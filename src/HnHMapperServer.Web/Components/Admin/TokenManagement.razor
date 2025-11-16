@@ -1,0 +1,217 @@
+@rendermode InteractiveServer
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject TenantContextService TenantContext
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ILogger<TokenManagement> Logger
+@inject IJSRuntime JS
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="4">
+        <div class="d-flex justify-space-between align-center">
+        <MudText Typo="Typo.h5">
+            <MudIcon Icon="@Icons.Material.Filled.Key" Class="me-2" />
+            Authentication Tokens
+        </MudText>
+        <MudButton Variant="Variant.Filled"
+                  Color="Color.Primary"
+                  StartIcon="@Icons.Material.Filled.Refresh"
+                  OnClick="LoadTokens"
+                  Disabled="@isLoading">
+            Refresh
+        </MudButton>
+    </div>
+
+    <MudDataGrid T="TokenDto" Items="@tokens" Loading="@isLoading" Filterable="true" SortMode="SortMode.Multiple" Hover="true">
+        <Columns>
+            <TemplateColumn Title="Token URL">
+                <CellTemplate>
+                    <MudText Style="font-family: monospace; font-size: 0.875rem; word-break: break-all;">@context.Item.Url</MudText>
+                </CellTemplate>
+            </TemplateColumn>
+            <PropertyColumn Property="x => x.Username" Title="Owner" />
+            <TemplateColumn Title="Permissions">
+                <CellTemplate>
+                    <MudStack Row="true" Spacing="1">
+                        @foreach (var auth in context.Item.Permissions)
+                        {
+                            <MudChip Size="Size.Small" Color="GetAuthColor(auth)">@auth</MudChip>
+                        }
+                    </MudStack>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Actions">
+                <CellTemplate>
+                    <MudStack Row="true" Spacing="1">
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" Color="Color.Primary" OnClick="@(() => CopyToClipboard(context.Item.Url))" Title="Copy URL to clipboard" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => ShowRevokeTokenDialog(context.Item))" Title="Revoke token" />
+                    </MudStack>
+                </CellTemplate>
+            </TemplateColumn>
+        </Columns>
+    </MudDataGrid>
+
+    @if (!tokens.Any() && !isLoading)
+    {
+        <MudPaper Elevation="0" Class="pa-8 text-center">
+            <MudIcon Icon="@Icons.Material.Filled.Key" Size="Size.Large" Color="Color.Default" Class="mb-4" />
+            <MudText Typo="Typo.h6" Color="Color.Default">No tokens found</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Default">Users can generate tokens from their dashboard</MudText>
+        </MudPaper>
+    }
+    </MudStack>
+</MudPaper>
+
+@code {
+    private List<TokenDto> tokens = new();
+    private bool isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTokens();
+    }
+
+    private async Task LoadTokens()
+    {
+        isLoading = true;
+        try
+        {
+            var tenantId = TenantContext.CurrentTenant?.Id;
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                // Fallback to fetching tenants
+                var tenants = await TenantContext.GetTenantsAsync();
+                tenantId = tenants.FirstOrDefault()?.Id;
+            }
+
+            // Fall back to getting TenantId from user claims
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+                tenantId = authState.User.FindFirst(HnHMapperServer.Core.Constants.AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+
+                Logger.LogInformation("Got tenant ID from claims: {TenantId}", tenantId);
+            }
+
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                Snackbar.Add("Unable to determine your tenant. Please contact support.", Severity.Error);
+                Logger.LogError("Unable to determine tenant ID for user");
+                return;
+            }
+
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync($"/api/tenants/{tenantId}/tokens");
+
+            if (response.IsSuccessStatusCode)
+            {
+                tokens = await response.Content.ReadFromJsonAsync<List<TokenDto>>() ?? new();
+                Logger.LogInformation("Loaded {Count} tokens for tenant {TenantId}", tokens.Count, tenantId);
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                Snackbar.Add("You are not authorized to view tokens.", Severity.Error);
+                tokens = new();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Endpoint doesn't exist yet, will be implemented in Phase 3
+                Logger.LogWarning("Tenant tokens endpoint not implemented yet");
+                Snackbar.Add("Token management endpoint not yet implemented.", Severity.Warning);
+                tokens = new();
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to load tokens: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add($"Failed to load tokens: {response.StatusCode}", Severity.Error);
+                tokens = new();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading tokens");
+            Snackbar.Add($"Error loading tokens: {ex.Message}", Severity.Error);
+            tokens = new();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private Color GetAuthColor(string auth)
+    {
+        return auth switch
+        {
+            "Map" => Color.Primary,
+            "Upload" => Color.Success,
+            "Writer" => Color.Info,
+            "Pointer" => Color.Secondary,
+            "Markers" => Color.Tertiary,
+            _ => Color.Default
+        };
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add("Copied to clipboard!", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Failed to copy to clipboard", Severity.Warning);
+        }
+    }
+
+    private async Task ShowRevokeTokenDialog(TokenDto token)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Revoke Token",
+            $"Are you sure you want to revoke this token for user '{token.Username}'? This action cannot be undone and will immediately invalidate the token.",
+            yesText: "Revoke",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            var tenantId = TenantContext.CurrentTenant?.Id;
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                var tenants = await TenantContext.GetTenantsAsync();
+                tenantId = tenants.FirstOrDefault()?.Id;
+            }
+
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                Snackbar.Add("No tenant context available", Severity.Error);
+                return;
+            }
+
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.DeleteAsync($"/api/tenants/{tenantId}/tokens/{token.Token}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add("Token revoked successfully", Severity.Success);
+                await LoadTokens();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Logger.LogWarning("Token revoke endpoint not implemented yet");
+                Snackbar.Add("Token management endpoint not yet implemented.", Severity.Warning);
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to revoke token: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add("Failed to revoke token", Severity.Error);
+            }
+        }
+    }
+}

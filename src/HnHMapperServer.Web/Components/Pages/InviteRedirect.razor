@@ -1,0 +1,13 @@
+@page "/invite/{code}"
+@inject NavigationManager NavigationManager
+
+@code {
+    [Parameter]
+    public string Code { get; set; } = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        // Redirect to registration page with invite code as query parameter
+        NavigationManager.NavigateTo($"/register?invite={Uri.EscapeDataString(Code)}");
+    }
+}

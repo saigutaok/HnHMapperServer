@@ -1,0 +1,452 @@
+// Smart Tile Layer Module
+// Custom Leaflet tile layer with caching, revision management, and smooth transitions
+
+import { TileSize, HnHMinZoom, HnHMaxZoom } from './leaflet-config.js';
+
+// Smart Tile Layer with caching and smooth transitions
+export const SmartTileLayer = L.TileLayer.extend({
+    cache: {},              // Per-map cache: { mapId: { tileKey: { etag, state } } }
+    invalidTile: "",
+    mapId: 0,
+    mapRevisions: {},       // Map ID → revision number for cache busting
+    revisionDebounce: {},   // Map ID → timeout handle for debouncing revision updates
+    negativeCache: {},      // Temporary negative cache: cacheKey → expiry timestamp (Date.now() + TTL)
+    negativeCacheTTL: 30000, // 30 seconds TTL for negative cache (reduced from 2 minutes for faster retry)
+    tileStates: {},         // Track tile loading state: tileKey → 'new'|'loaded'|'refreshing'
+    tilesLoading: 0,        // Count of currently loading tiles
+    tileQueue: [],          // Progressive loading queue: sorted by distance from center
+    processingQueue: false, // Whether we're currently processing the queue
+
+    getTileUrl: function (coords) {
+        // Don't request tiles if mapId is invalid (0 or negative)
+        if (!this.mapId || this.mapId <= 0) {
+            return this.invalidTile;
+        }
+
+        const data = {
+            x: coords.x,
+            y: coords.y,
+            map: this.mapId,
+            z: this._getZoomForUrl()
+        };
+
+        const cacheKey = `${data.map}:${data.x}:${data.y}:${data.z}`;
+        const tileKey = `${data.x}:${data.y}:${data.z}`;
+
+        // Initialize per-map cache if needed
+        if (!this.cache[data.map]) {
+            this.cache[data.map] = {};
+        }
+
+        // Get cache entry for this tile
+        const cacheEntry = this.cache[data.map][tileKey];
+        data.cache = cacheEntry?.etag || '';
+
+        // Check if tile is in negative cache (temporary blacklist)
+        const negativeExpiry = this.negativeCache[cacheKey];
+        if (negativeExpiry) {
+            const now = Date.now();
+            if (now < negativeExpiry) {
+                // Still within negative cache TTL - return invalid tile placeholder
+                return this.invalidTile;
+            } else {
+                // Negative cache expired - clear it and retry with nonce
+                delete this.negativeCache[cacheKey];
+                // Add retry nonce to bypass any browser/CDN 404 cache
+                data.cache = `r=${now}`;
+            }
+        }
+
+        // Track tile state (new tiles start in 'new' state)
+        if (!this.tileStates[cacheKey]) {
+            this.tileStates[cacheKey] = 'new';
+        }
+
+        // If cache exists and is valid, use it; otherwise use retry nonce (if set above) or empty
+        if (!data.cache) {
+            data.cache = '';
+        }
+
+        // Add revision parameter for cache busting (if we have a revision for this map)
+        const revision = this.mapRevisions[this.mapId] || 1;
+        data.v = revision;
+
+        return L.Util.template(this._url, L.Util.extend(data, this.options));
+    },
+
+    refresh: function (x, y, z) {
+        let zoom = z;
+        const maxZoom = this.options.maxZoom;
+        const zoomReverse = this.options.zoomReverse;
+        const zoomOffset = this.options.zoomOffset;
+
+        if (zoomReverse) {
+            zoom = maxZoom - zoom;
+        }
+        zoom = zoom + zoomOffset;
+
+        const key = `${x}:${y}:${zoom}`;
+        const tile = this._tiles[key];
+
+        if (!tile) {
+            return false; // Tile node doesn't exist yet; caller should redraw
+        }
+
+        const data = { x, y, map: this.mapId, z };
+        const cacheKey = `${data.map}:${data.x}:${data.y}:${data.z}`;
+        const tileKey = `${data.x}:${data.y}:${data.z}`;
+
+        // Initialize per-map cache if needed
+        if (!this.cache[data.map]) {
+            this.cache[data.map] = {};
+        }
+
+        // Get cache entry
+        const cacheEntry = this.cache[data.map][tileKey];
+        data.cache = cacheEntry?.etag || '';
+
+        // Check negative cache with TTL
+        const negativeExpiry = this.negativeCache[cacheKey];
+        if (negativeExpiry) {
+            const now = Date.now();
+            if (now < negativeExpiry) {
+                // Still negative - keep current tile visible instead of blanking it
+                // Only show placeholder if this is a brand new tile with no existing image
+                if (!tile.el.src || tile.el.src === this.invalidTile) {
+                    tile.el.src = this.invalidTile;
+                }
+                return true;
+            } else {
+                // Expired - clear and retry with nonce
+                delete this.negativeCache[cacheKey];
+                data.cache = `r=${now}`;
+            }
+        }
+
+        // If cache doesn't exist, use retry nonce (if set) or empty string
+        if (!data.cache) {
+            data.cache = '';
+        }
+
+        // Add revision parameter for cache busting
+        const revision = this.mapRevisions[this.mapId] || 1;
+        data.v = revision;
+
+        // Preload the new tile URL and only swap on successful load
+        // This prevents blackouts - the old tile stays visible until the new one is ready
+        const newUrl = L.Util.template(this._url, L.Util.extend(data, this.options));
+
+        // Normalize URLs to absolute form for reliable comparison (avoid unnecessary swaps)
+        const currentSrc = tile.el.src ? new URL(tile.el.src, location.origin).href : '';
+        const targetSrc = new URL(newUrl, location.origin).href;
+
+        // If the URL hasn't changed, no need to reload
+        if (currentSrc === targetSrc) {
+            return true;
+        }
+
+        // Mark tile as refreshing (important for crossfade logic)
+        const tileState = this.tileStates[cacheKey] || 'new';
+        this.tileStates[cacheKey] = 'refreshing';
+
+        // Preload off-DOM to avoid flicker
+        const preloader = new Image();
+        const self = this;
+
+        preloader.onload = () => {
+            // Decode image if supported to ensure it's ready before swap (reduces flicker)
+            const decodeAndSwap = () => {
+                // Only update if tile element still exists and belongs to same layer
+                if (tile.el && self._tiles[key]) {
+                    // Implement crossfade for refreshes (smooth transition from old to new)
+                    if (tileState === 'loaded' && tile.el.src && tile.el.src !== self.invalidTile) {
+                        // Tile is being refreshed - use crossfade transition
+                        // Save current opacity
+                        const originalOpacity = tile.el.style.opacity || '1';
+
+                        // Fade out to 0.3
+                        tile.el.style.transition = 'opacity 150ms ease-out';
+                        tile.el.style.opacity = '0.3';
+
+                        // Wait for fade out, then swap and fade in
+                        setTimeout(() => {
+                            if (tile.el && self._tiles[key]) {
+                                tile.el.src = newUrl;
+                                tile.el.style.transition = 'opacity 200ms ease-in';
+                                tile.el.style.opacity = originalOpacity;
+
+                                // Clean up transition after animation
+                                setTimeout(() => {
+                                    if (tile.el) {
+                                        tile.el.style.transition = '';
+                                    }
+                                }, 200);
+                            }
+                        }, 150);
+                    } else {
+                        // New tile - simple fade in
+                        tile.el.src = newUrl;
+                        tile.el.style.transition = 'opacity 200ms ease-in';
+
+                        // Clean up transition after animation
+                        setTimeout(() => {
+                            if (tile.el) {
+                                tile.el.style.transition = '';
+                            }
+                        }, 200);
+                    }
+
+                    // Update state to loaded
+                    self.tileStates[cacheKey] = 'loaded';
+                }
+            };
+
+            if (preloader.decode) {
+                preloader.decode()
+                    .then(decodeAndSwap)
+                    .catch(decodeAndSwap); // Decode failed, but still swap (better than nothing)
+            } else {
+                // Fallback for browsers without decode() support
+                decodeAndSwap();
+            }
+        };
+
+        preloader.onerror = () => {
+            // Mark as temporarily unavailable but keep old tile visible
+            self.negativeCache[cacheKey] = Date.now() + self.negativeCacheTTL;
+            // Reset state
+            self.tileStates[cacheKey] = tileState;
+        };
+
+        preloader.src = newUrl;
+        return true; // Successfully initiated refresh
+    },
+
+    // Update revision for a map and force refresh all tiles for that map (debounced)
+    setMapRevision: function (mapId, revision) {
+        const oldRevision = this.mapRevisions[mapId];
+
+        // Clear existing debounce timeout for this map
+        if (this.revisionDebounce[mapId]) {
+            clearTimeout(this.revisionDebounce[mapId]);
+        }
+
+        // Store the new revision immediately (for new tile requests)
+        this.mapRevisions[mapId] = revision;
+
+        // If this is the currently displayed map and revision changed, debounce the refresh
+        if (this.mapId === mapId && oldRevision !== revision) {
+            if (!this._map) return;
+
+            const self = this;
+
+            // Debounce tile refresh by 500ms to batch multiple revision updates
+            this.revisionDebounce[mapId] = setTimeout(() => {
+                delete self.revisionDebounce[mapId];
+
+                // Gather all visible tiles that need refreshing
+                const keys = Object.keys(self._tiles || {});
+                const tilesToRefresh = [];
+
+                for (let i = 0; i < keys.length; i++) {
+                    const key = keys[i];
+                    const parts = key.split(":");
+                    if (parts.length !== 3) continue;
+                    const x = parseInt(parts[0], 10);
+                    const y = parseInt(parts[1], 10);
+                    const processedZoom = parseInt(parts[2], 10);
+
+                    // Invert zoom transform used to build tile key so refresh() finds the node
+                    let z = processedZoom - (self.options.zoomOffset || 0);
+                    if (self.options.zoomReverse) {
+                        z = self.options.maxZoom - z;
+                    }
+
+                    tilesToRefresh.push({ x, y, z });
+                }
+
+                // Batch refresh tiles (4 per frame, reduced from 8 for smoother experience)
+                // With 50ms minimum delay between batches for better visual smoothness
+                const batchSize = 4;
+                let currentIndex = 0;
+
+                function refreshBatch() {
+                    const endIndex = Math.min(currentIndex + batchSize, tilesToRefresh.length);
+                    for (let i = currentIndex; i < endIndex; i++) {
+                        const tile = tilesToRefresh[i];
+                        self.refresh(tile.x, tile.y, tile.z);
+                    }
+                    currentIndex = endIndex;
+
+                    // Schedule next batch if there are more tiles (with 50ms delay)
+                    if (currentIndex < tilesToRefresh.length) {
+                        setTimeout(() => {
+                            requestAnimationFrame(refreshBatch);
+                        }, 50);
+                    }
+                }
+
+                // Start batched refresh
+                if (tilesToRefresh.length > 0) {
+                    requestAnimationFrame(refreshBatch);
+                }
+            }, 500); // 500ms debounce
+        }
+    },
+
+    // Clear negative cache entries for visible tiles in current viewport
+    // Called after zoom/move to allow retry of tiles that may have been temporarily unavailable
+    clearVisibleNegativeCache: function () {
+        if (!this._map || !this.mapId || this.mapId <= 0) {
+            return;
+        }
+
+        const bounds = this._map.getBounds();
+        const zoom = this._map.getZoom();
+        const tileRange = this._pxBoundsToTileRange(this._map.getPixelBounds());
+
+        // Iterate through visible tile coordinates
+        for (let x = tileRange.min.x; x <= tileRange.max.x; x++) {
+            for (let y = tileRange.min.y; y <= tileRange.max.y; y++) {
+                // Convert to HnH coordinates (account for zoomReverse)
+                let hnhZ = zoom;
+                if (this.options.zoomReverse) {
+                    hnhZ = this.options.maxZoom - zoom;
+                }
+
+                const cacheKey = `${this.mapId}:${x}:${y}:${hnhZ}`;
+                if (this.negativeCache[cacheKey]) {
+                    delete this.negativeCache[cacheKey];
+                }
+            }
+        }
+    },
+
+    // Override createTile to track loading state
+    createTile: function (coords, done) {
+        const tile = L.TileLayer.prototype.createTile.call(this, coords, done);
+
+        // Track loading state
+        this.tilesLoading++;
+
+        // Update loading overlay if it exists
+        this._updateLoadingOverlay();
+
+        // Wrap the done callback to track when tile finishes loading
+        const originalDone = done;
+        const self = this;
+
+        tile.addEventListener('load', function() {
+            self.tilesLoading = Math.max(0, self.tilesLoading - 1);
+            self._updateLoadingOverlay();
+            if (originalDone) originalDone(null, tile);
+        });
+
+        tile.addEventListener('error', function() {
+            self.tilesLoading = Math.max(0, self.tilesLoading - 1);
+            self._updateLoadingOverlay();
+            if (originalDone) originalDone(null, tile);
+        });
+
+        return tile;
+    },
+
+    // Update loading overlay based on tiles loading
+    _updateLoadingOverlay: function () {
+        if (!this._map) return;
+
+        const container = this._map.getContainer();
+        if (!container) return;
+
+        let overlay = container.querySelector('.tile-loading-overlay');
+
+        // Calculate loading percentage
+        const totalTiles = Object.keys(this._tiles || {}).length;
+        const loadingPercentage = totalTiles > 0 ? (this.tilesLoading / totalTiles) : 0;
+
+        // Show overlay if more than 50% of tiles are loading
+        if (loadingPercentage > 0.5 && this.tilesLoading > 5) {
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.className = 'tile-loading-overlay';
+                container.appendChild(overlay);
+            }
+            overlay.style.opacity = '0.05'; // Very subtle
+        } else {
+            if (overlay) {
+                overlay.style.opacity = '0';
+                setTimeout(() => {
+                    if (overlay && overlay.parentNode) {
+                        overlay.parentNode.removeChild(overlay);
+                    }
+                }, 300);
+            }
+        }
+    }
+});
+
+// Helper functions for parent tile placeholders
+export function setParentPlaceholder(layer, e, mapInstance) {
+    try {
+        const img = e?.tile; // underlying <img>
+        const coords = e?.coords;
+        if (!img || !coords || !layer || !mapInstance) return;
+
+        const leafletZ = coords.z;
+        let hnhZ = leafletZ;
+        if (layer.options.zoomReverse) {
+            hnhZ = layer.options.maxZoom - leafletZ;
+        }
+
+        const revision = layer.mapRevisions[layer.mapId] || 1;
+
+        // Try multiple parent levels (parent, grandparent, great-grandparent)
+        // This ensures we always have something to show even if immediate parent is missing
+        for (let levelUp = 1; levelUp <= 3; levelUp++) {
+            const parentZ = hnhZ - levelUp;
+            if (parentZ < HnHMinZoom) break; // no more parents available
+
+            const divisor = Math.pow(2, levelUp);
+            const parentX = Math.floor(coords.x / divisor);
+            const parentY = Math.floor(coords.y / divisor);
+
+            // Calculate which quadrant within the parent tile
+            const localX = coords.x % divisor;
+            const localY = coords.y % divisor;
+
+            // Build parent URL
+            const parentUrl = `/map/grids/${layer.mapId}/${parentZ}/${parentX}_${parentY}.png?v=${revision}`;
+
+            // Check if this parent might exist (not in negative cache)
+            const cacheKey = `${layer.mapId}:${parentX}:${parentY}:${parentZ}`;
+            if (layer.negativeCache[cacheKey]) {
+                continue; // Try next level up
+            }
+
+            // Size background to show the correct portion of parent tile
+            const backgroundSize = (divisor * 100) + '%';
+            const posX = (localX / (divisor - 1)) * 100; // % from left
+            const posY = (localY / (divisor - 1)) * 100; // % from top
+
+            img.style.backgroundImage = `url(${parentUrl})`;
+            img.style.backgroundSize = `${backgroundSize} ${backgroundSize}`;
+            img.style.backgroundPosition = `${posX}% ${posY}%`;
+            img.style.backgroundRepeat = 'no-repeat';
+
+            // Successfully set placeholder, stop trying higher levels
+            break;
+        }
+    } catch { /* ignore */ }
+}
+
+export function clearPlaceholder(e) {
+    try {
+        const img = e?.tile;
+        if (img) {
+            img.style.backgroundImage = '';
+            img.style.backgroundSize = '';
+            img.style.backgroundPosition = '';
+            img.style.backgroundRepeat = '';
+        }
+    } catch { /* ignore */ }
+}

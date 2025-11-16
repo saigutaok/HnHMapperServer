@@ -1,0 +1,286 @@
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Core.DTOs
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager NavigationManager
+@inject ILogger<TenantList> Logger
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="3">
+        <div class="d-flex justify-space-between align-center">
+            <MudText Typo="Typo.h5">
+                <MudIcon Icon="@Icons.Material.Filled.Business" Class="me-2" />
+                All Tenants
+            </MudText>
+            <MudStack Row="true" Spacing="2">
+                <MudButton Variant="Variant.Filled"
+                          Color="Color.Success"
+                          StartIcon="@Icons.Material.Filled.Add"
+                          OnClick="CreateTenant"
+                          Disabled="@_isLoading">
+                    Create Tenant
+                </MudButton>
+                <MudButton Variant="Variant.Filled"
+                          Color="Color.Primary"
+                          StartIcon="@Icons.Material.Filled.Refresh"
+                          OnClick="LoadTenants"
+                          Disabled="@_isLoading">
+                    Refresh
+                </MudButton>
+            </MudStack>
+        </div>
+
+        @if (_isLoading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (!_tenants.Any())
+        {
+            <MudAlert Severity="Severity.Info">
+                No tenants found in the system.
+            </MudAlert>
+        }
+        else
+        {
+            <MudTable T="TenantListDto" Items="@_tenants" Hover="true" Dense="true" OnRowClick="@((args) => NavigateToTenantDetails(args.Item))">
+                <HeaderContent>
+                    <MudTh>Tenant ID</MudTh>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Users</MudTh>
+                    <MudTh>Storage</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh>Created</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Tenant ID">
+                        <code>@context.Id</code>
+                    </MudTd>
+                    <MudTd DataLabel="Name">
+                        <MudText Typo="Typo.body2">@context.Name</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Users">
+                        <MudText Typo="Typo.body2">@context.UserCount</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Storage">
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                            <MudText Typo="Typo.body2">
+                                @FormatStorageSize(context.CurrentStorageMB) / @FormatStorageSize(context.StorageQuotaMB)
+                            </MudText>
+                            @{
+                                var usagePercent = context.StorageQuotaMB > 0
+                                    ? (context.CurrentStorageMB / context.StorageQuotaMB) * 100
+                                    : 0;
+                                var color = usagePercent >= 90 ? Color.Error : (usagePercent >= 75 ? Color.Warning : Color.Success);
+                            }
+                            <MudChip T="string" Size="Size.Small" Color="@color">
+                                @usagePercent.ToString("F0")%
+                            </MudChip>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Status">
+                        <MudChip T="string" Size="Size.Small" Color="@(context.IsActive ? Color.Success : Color.Error)">
+                            @(context.IsActive ? "Active" : "Suspended")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="Created">
+                        <MudText Typo="Typo.body2">@context.CreatedAt.ToString("yyyy-MM-dd")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Actions">
+                        <MudStack Row="true" Spacing="1">
+                            <MudIconButton Icon="@Icons.Material.Filled.Visibility"
+                                          Color="Color.Primary"
+                                          Size="Size.Small"
+                                          Title="View Details"
+                                          OnClick="@(() => NavigateToTenantDetails(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                          Color="Color.Info"
+                                          Size="Size.Small"
+                                          Title="Edit Tenant"
+                                          OnClick="@(() => EditTenant(context))" />
+                            @if (context.IsActive)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Block"
+                                              Color="Color.Warning"
+                                              Size="Size.Small"
+                                              Title="Suspend Tenant"
+                                              OnClick="@(() => SuspendTenant(context))" />
+                            }
+                            else
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.CheckCircle"
+                                              Color="Color.Success"
+                                              Size="Size.Small"
+                                              Title="Activate Tenant"
+                                              OnClick="@(() => ActivateTenant(context))" />
+                            }
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    private List<TenantListDto> _tenants = new();
+    private bool _isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTenants();
+    }
+
+    private async Task LoadTenants()
+    {
+        _isLoading = true;
+        try
+        {
+            Logger.LogInformation("LoadTenants: Loading all tenants");
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/api/superadmin/tenants");
+
+            if (response.IsSuccessStatusCode)
+            {
+                _tenants = await response.Content.ReadFromJsonAsync<List<TenantListDto>>() ?? new List<TenantListDto>();
+                Logger.LogInformation("LoadTenants: Loaded {Count} tenants", _tenants.Count);
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to load tenants: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add("Failed to load tenants. Please try again.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading tenants");
+            Snackbar.Add("Failed to load tenants. Please try again.", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void NavigateToTenantDetails(TenantListDto tenant)
+    {
+        NavigationManager.NavigateTo($"/superadmin/tenant/{tenant.Id}");
+    }
+
+    private async Task CreateTenant()
+    {
+        var dialog = await DialogService.ShowAsync<CreateTenantDialog>(
+            "Create New Tenant",
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            // Reload the tenant list to show the newly created tenant
+            await LoadTenants();
+        }
+    }
+
+    private async Task EditTenant(TenantListDto tenant)
+    {
+        var parameters = new DialogParameters<EditTenantDialog>
+        {
+            { x => x.Tenant, tenant }
+        };
+
+        var dialog = await DialogService.ShowAsync<EditTenantDialog>(
+            "Edit Tenant",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            // Reload the tenant list to reflect changes
+            await LoadTenants();
+        }
+    }
+
+    private async Task SuspendTenant(TenantListDto tenant)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Suspend Tenant",
+            $"Are you sure you want to suspend '{tenant.Name}'? This will prevent all users in this tenant from accessing the system until it is reactivated.",
+            yesText: "Suspend",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                var httpClient = HttpClientFactory.CreateClient("API");
+                var response = await httpClient.PostAsync($"/api/superadmin/tenants/{tenant.Id}/suspend", null);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    Snackbar.Add($"Tenant '{tenant.Name}' suspended successfully", Severity.Success);
+                    await LoadTenants(); // Reload the list
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    Logger.LogWarning("Failed to suspend tenant: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                    Snackbar.Add($"Failed to suspend tenant: {response.StatusCode}", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error suspending tenant {TenantId}", tenant.Id);
+                Snackbar.Add($"Error suspending tenant: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private async Task ActivateTenant(TenantListDto tenant)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Activate Tenant",
+            $"Are you sure you want to activate '{tenant.Name}'? This will restore access for all users in this tenant.",
+            yesText: "Activate",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                var httpClient = HttpClientFactory.CreateClient("API");
+                var response = await httpClient.PostAsync($"/api/superadmin/tenants/{tenant.Id}/activate", null);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    Snackbar.Add($"Tenant '{tenant.Name}' activated successfully", Severity.Success);
+                    await LoadTenants(); // Reload the list
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    Logger.LogWarning("Failed to activate tenant: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                    Snackbar.Add($"Failed to activate tenant: {response.StatusCode}", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error activating tenant {TenantId}", tenant.Id);
+                Snackbar.Add($"Error activating tenant: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private string FormatStorageSize(double mb)
+    {
+        if (mb >= 1024)
+        {
+            return $"{(mb / 1024):F2} GB";
+        }
+        return $"{mb:F0} MB";
+    }
+}

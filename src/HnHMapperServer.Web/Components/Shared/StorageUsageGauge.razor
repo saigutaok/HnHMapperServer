@@ -1,0 +1,80 @@
+@using HnHMapperServer.Web.Models
+
+<MudPaper Class="pa-4 mb-4 glass-morphism" Elevation="0">
+    <div class="d-flex justify-space-between align-center mb-2">
+        <MudText Typo="Typo.subtitle2">Storage Usage</MudText>
+        <MudText Typo="Typo.caption" Color="@GetUsageColor()">
+            @CurrentUsageMB.ToString("F2") MB / @QuotaMB MB (@UsagePercentage%)
+        </MudText>
+    </div>
+
+    <MudProgressLinear
+        Value="@UsagePercentage"
+        Color="@GetProgressColor()"
+        Size="Size.Medium"
+        Class="mb-2" />
+
+    @if (ShowWarning)
+    {
+        <MudAlert Severity="@GetAlertSeverity()" Dense="true" Class="mt-2 glass-morphism">
+            @GetWarningMessage()
+        </MudAlert>
+    }
+</MudPaper>
+
+@code {
+    [Parameter]
+    public decimal CurrentUsageMB { get; set; }
+
+    [Parameter]
+    public int QuotaMB { get; set; } = 1024;
+
+    private int UsagePercentage => QuotaMB > 0
+        ? (int)((CurrentUsageMB / QuotaMB) * 100)
+        : 0;
+
+    private bool ShowWarning => UsagePercentage >= 90;
+
+    private Color GetProgressColor()
+    {
+        return UsagePercentage switch
+        {
+            >= 100 => Color.Error,
+            >= 90 => Color.Error,
+            >= 70 => Color.Warning,
+            _ => Color.Success
+        };
+    }
+
+    private Color GetUsageColor()
+    {
+        return UsagePercentage switch
+        {
+            >= 100 => Color.Error,
+            >= 90 => Color.Error,
+            >= 70 => Color.Warning,
+            _ => Color.Default
+        };
+    }
+
+    private Severity GetAlertSeverity()
+    {
+        return UsagePercentage >= 100 ? Severity.Error : Severity.Warning;
+    }
+
+    private string GetWarningMessage()
+    {
+        if (UsagePercentage >= 100)
+        {
+            return "Storage quota exceeded! You cannot upload new data until you free up space.";
+        }
+        else if (UsagePercentage >= 90)
+        {
+            return "Storage almost full! Please consider deleting old maps or requesting a quota increase.";
+        }
+        else
+        {
+            return "Storage usage is within normal limits.";
+        }
+    }
+}

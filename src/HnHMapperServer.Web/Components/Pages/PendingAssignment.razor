@@ -1,0 +1,68 @@
+@page "/pending-assignment"
+@rendermode InteractiveServer
+@inject NavigationManager NavigationManager
+
+<PageTitle>Pending Assignment - HnH Mapper</PageTitle>
+
+<div class="auth-page">
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+    <MudPaper Elevation="0" Class="pa-8">
+        <div class="d-flex flex-column align-center">
+            <MudIcon Icon="@Icons.Material.Filled.HourglassEmpty"
+                     Size="Size.Large"
+                     Color="Color.Info"
+                     Class="mb-4"
+                     Style="font-size: 4rem;" />
+
+            <MudText Typo="Typo.h4" Align="Align.Center" Class="mb-2">
+                Registration Successful
+            </MudText>
+
+            <MudText Typo="Typo.h6" Align="Align.Center" Class="mb-4" Color="Color.Secondary">
+                Awaiting Administrator Assignment
+            </MudText>
+
+            <MudDivider Class="mb-4" Style="width: 100%;" />
+
+            <MudAlert Severity="Severity.Info" Class="mb-4" Style="width: 100%;">
+                <MudText>
+                    <strong>Your account has been created successfully!</strong>
+                </MudText>
+                <MudText Class="mt-2">
+                    A system administrator will assign you to a tenant and grant you access.
+                    You will be able to log in once the assignment is complete.
+                </MudText>
+            </MudAlert>
+
+            <MudText Typo="Typo.body2" Align="Align.Center" Color="Color.Secondary" Class="mb-4">
+                This process typically takes a few minutes to a few hours, depending on administrator availability.
+            </MudText>
+
+            <MudStack Row="true" Spacing="2" Class="mt-4">
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           OnClick="@(() => NavigationManager.NavigateTo("/login"))"
+                           StartIcon="@Icons.Material.Filled.Login">
+                    Go to Login
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Default"
+                           OnClick="@(() => NavigationManager.NavigateTo("/"))"
+                           StartIcon="@Icons.Material.Filled.Home">
+                    Home
+                </MudButton>
+            </MudStack>
+        </div>
+    </MudPaper>
+
+    <MudText Typo="Typo.caption" Align="Align.Center" Class="mt-4" Color="Color.Secondary">
+        If you have questions, please contact your system administrator.
+    </MudText>
+</MudContainer>
+</div>
+
+@code {
+    // This page is displayed when users register without an invitation code
+    // They need to wait for a SuperAdmin to assign them to a tenant
+}

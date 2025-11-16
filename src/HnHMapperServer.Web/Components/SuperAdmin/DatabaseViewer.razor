@@ -1,0 +1,269 @@
+@rendermode InteractiveServer
+@using HnHMapperServer.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+
+<MudCard>
+    <MudCardContent>
+        <MudTabs Elevation="4" Rounded="true" Centered="true">
+            <MudTabPanel Text="SQL Query" Icon="@Icons.Material.Filled.Code">
+                <MudTextField @bind-Value="sqlQuery"
+                              Label="SQL Query"
+                              Variant="Variant.Outlined"
+                              Lines="5"
+                              Class="mb-4"
+                              Placeholder="SELECT * FROM Users LIMIT 10" />
+
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           OnClick="ExecuteQuery"
+                           Disabled="@isLoading"
+                           StartIcon="@Icons.Material.Filled.PlayArrow">
+                    Execute Query
+                </MudButton>
+
+                @if (!string.IsNullOrEmpty(queryError))
+                {
+                    <MudAlert Severity="Severity.Error" Class="mt-4">@queryError</MudAlert>
+                }
+
+                @if (queryResult != null && queryResult.Rows.Any())
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-4">Results: @queryResult.RowCount rows</MudText>
+                    <MudDataGrid Items="@queryResult.Rows" Dense="true" Class="mt-2" Loading="@isLoading">
+                        <LoadingContent>
+                            <MudStack AlignItems="AlignItems.Center" Spacing="2" Class="pa-4">
+                                <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+                                <MudText Typo="Typo.body2">Executing query...</MudText>
+                            </MudStack>
+                        </LoadingContent>
+                        <Columns>
+                            @foreach (var column in queryResult.Columns)
+                            {
+                                var col = column;
+                                <PropertyColumn Property="x => x[col]" Title="@col" />
+                            }
+                        </Columns>
+                    </MudDataGrid>
+                }
+            </MudTabPanel>
+
+            <MudTabPanel Text="Browse Tables" Icon="@Icons.Material.Filled.TableChart">
+                <MudSelect @bind-Value="selectedTable"
+                           Label="Select Table"
+                           Variant="Variant.Outlined"
+                           Class="mb-4"
+                           T="string">
+                    @foreach (var table in tables)
+                    {
+                        <MudSelectItem Value="@table.Name">@table.Name (@table.RowCount rows)</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           OnClick="LoadTableData"
+                           Disabled="@(isLoading || string.IsNullOrEmpty(selectedTable))"
+                           StartIcon="@Icons.Material.Filled.Refresh">
+                    Load Data
+                </MudButton>
+
+                @if (tableData != null && tableData.Rows.Any())
+                {
+                    <MudText Typo="Typo.subtitle2" Class="mt-4">@tableData.RowCount rows (max 1000)</MudText>
+                    <MudDataGrid Items="@tableData.Rows" Dense="true" Filterable="true" Class="mt-2" Loading="@isLoading">
+                        <LoadingContent>
+                            <MudStack AlignItems="AlignItems.Center" Spacing="2" Class="pa-4">
+                                <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+                                <MudText Typo="Typo.body2">Loading table data...</MudText>
+                            </MudStack>
+                        </LoadingContent>
+                        <Columns>
+                            @foreach (var column in tableData.Columns)
+                            {
+                                var col = column;
+                                <PropertyColumn Property="x => x[col]" Title="@col" />
+                            }
+                        </Columns>
+                    </MudDataGrid>
+                }
+            </MudTabPanel>
+
+            <MudTabPanel Text="Schema" Icon="@Icons.Material.Filled.Schema">
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           OnClick="LoadSchema"
+                           Disabled="@isLoading"
+                           StartIcon="@Icons.Material.Filled.Refresh"
+                           Class="mb-4">
+                    Load Schema
+                </MudButton>
+
+                @if (schema != null)
+                {
+                    @foreach (var table in schema.Tables)
+                    {
+                        <MudPaper Class="pa-4 mb-4">
+                            <MudText Typo="Typo.h6">@table.TableName</MudText>
+                            <MudSimpleTable Dense="true" Class="mt-2">
+                                <thead>
+                                    <tr>
+                                        <th>Column</th>
+                                        <th>Type</th>
+                                        <th>Nullable</th>
+                                        <th>Primary Key</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var column in table.Columns)
+                                    {
+                                        <tr>
+                                            <td>@column.Name</td>
+                                            <td>@column.Type</td>
+                                            <td>@(column.IsNullable ? "Yes" : "No")</td>
+                                            <td>@(column.IsPrimaryKey ? "✓" : "")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        </MudPaper>
+                    }
+                }
+            </MudTabPanel>
+        </MudTabs>
+    </MudCardContent>
+</MudCard>
+
+@code {
+    private bool isLoading = false;
+    private string sqlQuery = "SELECT * FROM Users LIMIT 10";
+    private string? queryError;
+    private DatabaseQueryResult? queryResult;
+
+    private List<DatabaseTableInfo> tables = new();
+    private string? selectedTable;
+    private DatabaseQueryResult? tableData;
+
+    private DatabaseSchemaInfo? schema;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTables();
+    }
+
+    private async Task LoadTables()
+    {
+        isLoading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/admin/database/tables");
+
+            if (response.IsSuccessStatusCode)
+            {
+                tables = await response.Content.ReadFromJsonAsync<List<DatabaseTableInfo>>() ?? new();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                Snackbar.Add("You are not authorized to view database tables. Please ensure you're logged in as an admin.", Severity.Error);
+                tables = new();
+            }
+            else
+            {
+                Snackbar.Add($"Failed to load tables: {response.StatusCode}", Severity.Error);
+                tables = new();
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Network error loading tables: {ex.Message}", Severity.Error);
+            tables = new();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading tables: {ex.Message}", Severity.Error);
+            tables = new();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task ExecuteQuery()
+    {
+        isLoading = true;
+        queryError = null;
+        queryResult = null;
+
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.PostAsJsonAsync("/admin/database/query", new { Query = sqlQuery });
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<DatabaseQueryResult>();
+                if (result != null)
+                {
+                    if (!string.IsNullOrEmpty(result.Error))
+                    {
+                        queryError = result.Error;
+                    }
+                    else
+                    {
+                        queryResult = result;
+                    }
+                }
+            }
+            else
+            {
+                var errorResult = await response.Content.ReadFromJsonAsync<DatabaseQueryResult>();
+                queryError = errorResult?.Error ?? "Failed to execute query";
+            }
+        }
+        catch (Exception ex)
+        {
+            queryError = ex.Message;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task LoadTableData()
+    {
+        if (string.IsNullOrEmpty(selectedTable))
+            return;
+
+        isLoading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            tableData = await httpClient.GetFromJsonAsync<DatabaseQueryResult>($"/admin/database/table/{selectedTable}");
+            if (tableData == null || !string.IsNullOrEmpty(tableData.Error))
+            {
+                Snackbar.Add($"Failed to load table data: {tableData?.Error}", Severity.Error);
+            }
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task LoadSchema()
+    {
+        isLoading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            schema = await httpClient.GetFromJsonAsync<DatabaseSchemaInfo>("/admin/database/schema");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+}

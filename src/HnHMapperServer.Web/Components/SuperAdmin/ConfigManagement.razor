@@ -1,0 +1,220 @@
+@using System.Collections.Generic
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject ILogger<ConfigManagement> Logger
+
+<MudText Typo="Typo.h5" Class="mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.Settings" Class="me-2" />
+    System Configuration
+</MudText>
+
+@if (_isLoading)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else
+{
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudText Typo="Typo.h6" Class="mb-3">Configuration Values</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+            Manage system-wide configuration settings. Changes take effect immediately.
+        </MudText>
+
+        <MudStack Spacing="3">
+            @* Title *@
+            <MudTextField @bind-Value="_title"
+                          Label="Site Title"
+                          Variant="Variant.Outlined"
+                          HelperText="The title displayed on all pages"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Title" />
+
+            @* Prefix *@
+            <MudTextField @bind-Value="_prefix"
+                          Label="URL Prefix"
+                          Variant="Variant.Outlined"
+                          HelperText="Base URL for displaying tokens (e.g., https://map.hnhmap.xyz)"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Link" />
+
+            @* Default Hide *@
+            <MudSwitch @bind-Value="_defaultHide"
+                       Color="Color.Primary"
+                       Label="@(_defaultHide ? "New maps hidden by default" : "New maps visible by default")">
+                <MudText Typo="Typo.body2" Class="mt-1">
+                    When enabled, newly created maps will be hidden from the map list by default.
+                </MudText>
+            </MudSwitch>
+        </MudStack>
+
+        <MudStack Row="true" Spacing="2" Class="mt-4">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       OnClick="SaveConfig"
+                       Disabled="@_isSaving">
+                @if (_isSaving)
+                {
+                    <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                    <MudText Class="ms-2">Saving...</MudText>
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Save" Class="me-2" />
+                    <MudText>Save Changes</MudText>
+                }
+            </MudButton>
+
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Secondary"
+                       OnClick="LoadConfig"
+                       Disabled="@_isLoading">
+                <MudIcon Icon="@Icons.Material.Filled.Refresh" Class="me-2" />
+                Reset
+            </MudButton>
+        </MudStack>
+    </MudPaper>
+
+    @* Additional Config Values *@
+    @if (_otherConfigValues.Any())
+    {
+        <MudPaper Elevation="2" Class="pa-4 mt-4">
+            <MudText Typo="Typo.h6" Class="mb-3">Other Configuration Values</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Additional configuration values not managed by this UI.
+            </MudText>
+
+            <MudSimpleTable Dense="true" Hover="true">
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var kvp in _otherConfigValues)
+                    {
+                        <tr>
+                            <td><code>@kvp.Key</code></td>
+                            <td>@kvp.Value</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    }
+}
+
+@code {
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+
+    // Known config values
+    private string _title = string.Empty;
+    private string _prefix = string.Empty;
+    private bool _defaultHide = false;
+
+    // Other config values
+    private Dictionary<string, string> _otherConfigValues = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadConfig();
+    }
+
+    private async Task LoadConfig()
+    {
+        _isLoading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/api/superadmin/config");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var config = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>()
+                    ?? new Dictionary<string, string>();
+
+                // Extract known values
+                _title = config.GetValueOrDefault("title", "");
+                _prefix = config.GetValueOrDefault("prefix", "");
+                _defaultHide = config.GetValueOrDefault("defaultHide", "false") == "true";
+
+                // Store other values
+                _otherConfigValues = config
+                    .Where(kvp => kvp.Key != "title" && kvp.Key != "prefix" && kvp.Key != "defaultHide")
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+                Logger.LogInformation("Loaded {Count} config values", config.Count);
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to load config: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add("Failed to load configuration", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading config");
+            Snackbar.Add($"Error loading configuration: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task SaveConfig()
+    {
+        _isSaving = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+
+            // Update each known config value
+            var updates = new Dictionary<string, string>
+            {
+                { "title", _title },
+                { "prefix", _prefix },
+                { "defaultHide", _defaultHide.ToString().ToLower() }
+            };
+
+            var failedUpdates = new List<string>();
+
+            foreach (var kvp in updates)
+            {
+                var request = new { value = kvp.Value };
+                var response = await httpClient.PutAsJsonAsync($"/api/superadmin/config/{kvp.Key}", request);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    Logger.LogWarning("Failed to update config {Key}: {StatusCode}, Body={Body}",
+                        kvp.Key, response.StatusCode, errorBody);
+                    failedUpdates.Add(kvp.Key);
+                }
+            }
+
+            if (failedUpdates.Any())
+            {
+                Snackbar.Add($"Failed to update: {string.Join(", ", failedUpdates)}", Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add("Configuration saved successfully", Severity.Success);
+            }
+
+            // Reload to confirm changes
+            await LoadConfig();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error saving config");
+            Snackbar.Add($"Error saving configuration: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+}

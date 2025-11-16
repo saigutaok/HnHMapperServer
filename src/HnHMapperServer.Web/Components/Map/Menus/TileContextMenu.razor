@@ -1,0 +1,56 @@
+@using MudBlazor
+
+<!-- Context menu for tile operations (shown on right-click) -->
+@if (Visible)
+{
+    <div class="context-menu" style="position: fixed; left: @(Left)px; top: @(Top)px; z-index: 2000;">
+        <MudPaper Elevation="4">
+            <MudList T="string" Dense="true">
+                <MudListItem T="string" OnClick="@(() => OnWipeTile.InvokeAsync())">
+                    Wipe tile @Grid.x, @Grid.y
+                </MudListItem>
+                <MudListItem T="string" OnClick="@(() => OnSetCoords.InvokeAsync())">
+                    Rewrite tile coords for @Grid.x, @Grid.y
+                </MudListItem>
+            </MudList>
+        </MudPaper>
+    </div>
+}
+
+@code {
+    /// <summary>
+    /// Whether the context menu is visible
+    /// </summary>
+    [Parameter] public bool Visible { get; set; }
+    
+    /// <summary>
+    /// X position of the context menu in screen coordinates
+    /// </summary>
+    [Parameter] public int Left { get; set; }
+    
+    /// <summary>
+    /// Y position of the context menu in screen coordinates
+    /// </summary>
+    [Parameter] public int Top { get; set; }
+    
+    /// <summary>
+    /// Grid coordinates (x, y) of the tile
+    /// </summary>
+    [Parameter] public (int x, int y) Grid { get; set; }
+    
+    /// <summary>
+    /// Event callback when wipe tile is selected
+    /// </summary>
+    [Parameter] public EventCallback OnWipeTile { get; set; }
+    
+    /// <summary>
+    /// Event callback when set coords is selected
+    /// </summary>
+    [Parameter] public EventCallback OnSetCoords { get; set; }
+}
+
+
+
+
+
+

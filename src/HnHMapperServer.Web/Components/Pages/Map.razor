@@ -1,0 +1,187 @@
+@page "/map"
+@rendermode InteractiveServer
+@using HnHMapperServer.Web.Services
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Components.Map
+@using HnHMapperServer.Web.Components.Map.Sidebar
+@using HnHMapperServer.Web.Components.Map.Menus
+@using HnHMapperServer.Core.Enums
+@using HnHMapperServer.Core.Extensions
+@using Microsoft.AspNetCore.Authorization
+
+<PageTitle>Map Viewer</PageTitle>
+
+<div class="map-page map-view">
+    @if (!hasMapPermission)
+    {
+        <div class="map-loading">
+            <MudIcon Icon="@Icons.Material.Filled.Lock" Size="Size.Large" Color="Color.Warning" Class="mb-4" />
+            <MudText Typo="Typo.h5" Class="mb-2">Waiting for Map Access</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">You don't have permission to view the map yet.</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">Contact an administrator to grant you Map access.</MudText>
+            <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Small" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">Checking for permission updates...</MudText>
+        </div>
+    }
+    else if (!isLoaded)
+    {
+        <div class="map-loading">
+            <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+            <MudText Typo="Typo.h6" Class="mt-4">Loading map...</MudText>
+        </div>
+    }
+    else
+    {
+        <MudDrawerContainer Class="map-drawer-container">
+            <!-- Right-side sidebar with all panels -->
+            <MapSidebar @bind-IsOpen="@isSidebarOpen"
+                        State="@state"
+                        Maps="@maps"
+                        Markers="@allMarkers"
+                        CustomMarkers="@allCustomMarkers"
+                        Characters="@allCharacters"
+                        CurrentMode="@sidebarMode"
+                        OnModeChanged="@((mode) => SetMode(mode))"
+                        IsFollowing="@isFollowing"
+                        FollowingCharacterId="@followingCharacterId"
+                        SelectedMap="@selectedMap"
+                        OverlayMap="@overlayMap"
+                        OnMapSelected="@HandleMapSelectedInternal"
+                        OnOverlayMapSelected="@HandleOverlayMapSelectedInternal"
+                        OnZoomIn="@HandleZoomIn"
+                        OnZoomOut="@HandleZoomOut"
+                        OnResetView="@HandleResetView"
+                        OnToggleGridCoordinates="@(async (bool value) => await HandleToggleGridCoordinates(value))"
+                        OnTogglePlayers="@(async (bool value) => await HandleLayerToggle(() => LayerVisibility.ShowPlayers = value))"
+                        OnTogglePlayerTooltips="@(async (bool value) => await HandleLayerToggle(() => LayerVisibility.ShowPlayerTooltips = value))"
+                        OnToggleMarkers="@(async (bool value) => await HandleLayerToggle(() => LayerVisibility.ShowMarkers = value))"
+                        OnToggleCustomMarkers="@OnToggleCustomMarkers"
+                        OnToggleThingwalls="@(async (bool value) => await HandleLayerToggle(() => LayerVisibility.ShowThingwalls = value))"
+                        OnToggleThingwallTooltips="@(async (bool value) => await HandleLayerToggle(() => LayerVisibility.ShowThingwallTooltips = value))"
+                        OnToggleQuests="@(async (bool value) => await HandleLayerToggle(() => LayerVisibility.ShowQuests = value))"
+                        OnToggleQuestTooltips="@(async (bool value) => await HandleLayerToggle(() => LayerVisibility.ShowQuestTooltips = value))"
+                        OnPlayerSelected="@SelectPlayer"
+                        OnMarkerSelected="@SelectMarker"
+                        OnCustomMarkerEdit="@ShowEditCustomMarkerDialog"
+                        OnCustomMarkerDelete="@DeleteCustomMarkerAsync"
+                        OnCustomMarkerSelected="@SelectCustomMarker"
+                        OnStopFollowing="@StopFollowing" />
+
+            <MudMainContent>
+                <!-- Floating Menu Button - dynamically positioned based on sidebar state -->
+                <MudFab Color="Color.Primary"
+                        StartIcon="@Icons.Material.Filled.Menu"
+                        OnClick="@(() => isSidebarOpen = !isSidebarOpen)"
+                        Style="@GetMenuButtonStyle()"
+                        Size="Size.Large"
+                        Class="menu-fab"
+                        Title="Toggle menu">
+                    @if (allCharacters.Count > 0)
+                    {
+                        <MudBadge Content="@allCharacters.Count" 
+                                  Color="Color.Success" 
+                                  Overlap="true" 
+                                  Style="position: absolute; top: -8px; right: -8px;" />
+                    }
+                </MudFab>
+
+                <!-- Following Indicator (floating) - positioned at top of map area -->
+                @if (isFollowing && followingCharacterId.HasValue)
+                {
+                    <MudChip T="string" Color="Color.Success"
+                             OnClose="@StopFollowing"
+                             CloseIcon="@Icons.Material.Filled.Close"
+                             Style="position: absolute; top: 16px; left: 16px; z-index: 1400;">
+                        Following: @(allCharacters.FirstOrDefault(c => c.Id == followingCharacterId)?.Name ?? "Unknown")
+                    </MudChip>
+                }
+
+                <!-- Go to Ping Button (floating) - positioned at top center of map area, only shown when there are active pings -->
+                @if (hasActivePing)
+                {
+                    <div style="position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1400;">
+                        <MudButton Color="Color.Error"
+                                   Variant="Variant.Filled"
+                                   StartIcon="@Icons.Material.Filled.LocationSearching"
+                                   OnClick="@HandleGoToPing"
+                                   Size="Size.Large">
+                            Jump to Latest Ping
+                        </MudButton>
+                    </div>
+                }
+
+                <!-- Add Custom Marker Hint (floating, bottom-right, only when has markers permission) -->
+                @if (hasMarkersPermission)
+                {
+                    <MudPaper Elevation="3"
+                              Style="@GetAddMarkerButtonStyle()"
+                              Class="pulse-hint pa-2">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@Icons.Material.Filled.AddLocation" Color="Color.Success" Size="Size.Medium" />
+                            <MudText Typo="Typo.caption" Color="Color.Success">
+                                Right-click for marker/ping options
+                            </MudText>
+                        </MudStack>
+                    </MudPaper>
+                }
+
+                <!-- Fullscreen Map View -->
+                <div class="map-view-container-fullscreen @(isSidebarOpen ? "sidebar-open" : "")" @onclick="@HandleMapClick">
+                    <MapView @ref="mapView"
+                             State="@state"
+                             OnMapDragged="@HandleMapDragged"
+                             OnMapZoomed="@HandleMapZoomed"
+                             OnContextMenu="@HandleContextMenu"
+                             OnMarkerClicked="@HandleMarkerClicked"
+                             OnMarkerContextMenu="@HandleMarkerContextMenu"
+                             OnMapRightClick="@HandleMapRightClick"
+                             OnMapInitialized="@HandleMapInitialized"
+                             OnMapChanged="@HandleMapChanged" />
+                </div>
+            </MudMainContent>
+        </MudDrawerContainer>
+
+        <!-- Tile Context Menu (admin/writer only) -->
+        @if (state.Permissions.Contains("admin") || state.Permissions.Contains(Permission.Writer.ToClaimValue()))
+        {
+            <TileContextMenu Visible="@showContextMenu"
+                             Left="@contextMenuX"
+                             Top="@contextMenuY"
+                             Grid="@contextCoords"
+                             OnWipeTile="@HandleWipeTile"
+                             OnSetCoords="@HandleSetCoords" />
+        }
+
+        <!-- Marker Context Menu (admin/writer only) -->
+        @if (state.Permissions.Contains("admin") || state.Permissions.Contains(Permission.Writer.ToClaimValue()))
+        {
+            <MarkerContextMenu Visible="@showMarkerContextMenu"
+                               Left="@contextMenuX"
+                               Top="@contextMenuY"
+                               MarkerId="@contextMarkerId"
+                               OnHideMarker="@(() => HandleHideMarker(contextMarkerId))"
+                               OnDeleteMarker="@(() => HandleDeleteMarker(contextMarkerId))" />
+        }
+
+        <!-- Map Action Context Menu (for Create Marker/Ping) -->
+        @if (showMapActionMenu && hasMarkersPermission)
+        {
+            <MudPaper Class="context-menu" Style="@($"position: fixed; left: {contextMenuX}px; top: {contextMenuY}px; z-index: 2000;")" Elevation="8">
+                <MudList Clickable="true" Dense="true" T="string">
+                    <MudListItem OnClick="@HandleCreateCustomMarkerFromMenu" T="string">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@Icons.Material.Filled.AddLocation" Size="Size.Small" Color="Color.Success" />
+                            <MudText>Create Custom Marker</MudText>
+                        </MudStack>
+                    </MudListItem>
+                    <MudListItem OnClick="@HandleCreatePingFromMenu" T="string">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@Icons.Material.Filled.LocationSearching" Size="Size.Small" Color="Color.Error" />
+                            <MudText>Ping (60s)</MudText>
+                        </MudStack>
+                    </MudListItem>
+                </MudList>
+            </MudPaper>
+        }
+    }
+</div>

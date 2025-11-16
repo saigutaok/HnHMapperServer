@@ -1,0 +1,131 @@
+@using HnHMapperServer.Core.DTOs
+@using TenantUserDto = HnHMapperServer.Core.DTOs.TenantUserDto
+@using MudBlazor
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject ILogger<ChangeUserRoleDialog> Logger
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">Change Role: @User?.Username</MudText>
+
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Select the role for this user:
+        </MudText>
+
+        <MudRadioGroup @bind-Value="_selectedRole" T="string">
+            <MudRadio T="string" Value="@("TenantUser")" Color="Color.Primary">
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.body1"><strong>Tenant User</strong></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">Standard user with assigned permissions</MudText>
+                </MudStack>
+            </MudRadio>
+            <MudRadio T="string" Value="@("TenantAdmin")" Color="Color.Primary" Class="mt-3">
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.body1"><strong>Tenant Admin</strong></MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">Can manage users and invitations within this tenant</MudText>
+                </MudStack>
+            </MudRadio>
+        </MudRadioGroup>
+
+        @if (!string.IsNullOrEmpty(_selectedRole) && _selectedRole != User?.Role)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                <strong>Current role:</strong> @User?.Role → <strong>New role:</strong> @_selectedRole
+            </MudAlert>
+        }
+        else if (_selectedRole == User?.Role)
+        {
+            <MudAlert Severity="Severity.Normal" Dense="true" Class="mt-3">
+                User already has this role.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="ChangeRole"
+                   Disabled="@(string.IsNullOrEmpty(_selectedRole) || _selectedRole == User?.Role || _isSaving)">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ms-2">Changing...</MudText>
+            }
+            else
+            {
+                <MudText>Change Role</MudText>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public TenantUserDto? User { get; set; }
+    [Parameter] public string? TenantId { get; set; }
+
+    private string _selectedRole = string.Empty;
+    private bool _isSaving = false;
+
+    protected override void OnParametersSet()
+    {
+        if (User != null && !string.IsNullOrEmpty(User.Role))
+        {
+            // Pre-select current role
+            _selectedRole = User.Role;
+        }
+    }
+
+    private void Cancel()
+    {
+        MudDialog?.Cancel();
+    }
+
+    private async Task ChangeRole()
+    {
+        if (User == null || string.IsNullOrEmpty(TenantId) || string.IsNullOrEmpty(_selectedRole))
+        {
+            Snackbar.Add("Invalid user, tenant, or role", Severity.Error);
+            return;
+        }
+
+        if (_selectedRole == User.Role)
+        {
+            Snackbar.Add("User already has this role", Severity.Info);
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var request = new { role = _selectedRole };
+
+            var response = await httpClient.PutAsJsonAsync(
+                $"/api/superadmin/tenants/{TenantId}/users/{User.UserId}/role",
+                request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Role changed to {_selectedRole} for {User.Username}", Severity.Success);
+                MudDialog?.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to change role: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add($"Failed to change role: {response.StatusCode}", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error changing role for user {UserId}", User.UserId);
+            Snackbar.Add($"Error changing role: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+}

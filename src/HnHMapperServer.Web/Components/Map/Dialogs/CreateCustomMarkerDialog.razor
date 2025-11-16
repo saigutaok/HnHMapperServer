@@ -1,0 +1,325 @@
+@rendermode InteractiveServer
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@using System.Text.Json
+@using System.Net.Http.Json
+@using System.Text
+@using HnHMapperServer.Web.Models
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.Place" Class="mr-1" />
+            Add Custom Marker
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="title" 
+                         Label="Title" 
+                         Required="true" 
+                         MaxLength="80"
+                         Counter="80"
+                         Immediate="true"
+                         HelperText="Required (max 80 characters)" />
+
+            <MudTextField @bind-Value="description" 
+                         Label="Description" 
+                         Lines="3" 
+                         MaxLength="1000"
+                         Counter="1000"
+                         Immediate="true"
+                         HelperText="Optional (max 1000 characters)" />
+
+            <div class="icon-autocomplete-context">
+            <MudAutocomplete T="string"
+                            @bind-Value="selectedIcon"
+                            Label="Icon"
+                            Placeholder="Type to search for an icon..."
+                            MinCharacters="0"
+                            OpenMenuOnFocus="true"
+                            SearchFunc="@SearchIcons"
+                            DebounceInterval="300"
+                            Required="true"
+                            ResetValueOnEmptyText="false"
+                            CoerceText="false"
+                            CoerceValue="false"
+                            Disabled="@loadingIcons"
+                            Variant="Variant.Outlined"
+                            Dense="true"
+                            MaxItems="100"
+                            ShowProgressIndicator="true"
+                            HelperText="Required - search from 2000+ icons"
+                            ToStringFunc="@(icon => string.IsNullOrEmpty(icon) ? "" : System.IO.Path.GetFileNameWithoutExtension(icon))"
+                            DisablePortal="true"
+                            PopoverClass="icon-autocomplete-popover"
+                            AnchorOrigin="Origin.BottomLeft"
+                            TransformOrigin="Origin.TopLeft">
+                <ItemTemplate Context="iconPath">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <img src="/@iconPath" alt="icon" style="width: 24px; height: 24px; object-fit: contain;" />
+                        <span>@System.IO.Path.GetFileNameWithoutExtension(iconPath)</span>
+                    </div>
+                </ItemTemplate>
+            </MudAutocomplete>
+            </div>
+            
+            @if (!string.IsNullOrEmpty(selectedIcon))
+            {
+                <MudPaper Class="pa-2" Outlined="true">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudText Typo="Typo.caption">Preview:</MudText>
+                        <img src="/@selectedIcon" alt="preview" style="width: 32px; height: 32px; object-fit: contain;" />
+                        <MudText Typo="Typo.body2">@System.IO.Path.GetFileNameWithoutExtension(selectedIcon)</MudText>
+                    </MudStack>
+                </MudPaper>
+            }
+
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Location: Map @MapId, Grid (@CoordX, @CoordY), Position (@X, @Y)
+            </MudText>
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Create" Disabled="@isCreating">
+            @if (isCreating)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                <span class="ms-2">Creating...</span>
+            }
+            else
+            {
+                <span>Create</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    /// <summary>
+    /// Shared JSON options (camelCase, case-insensitive) to match API defaults
+    /// </summary>
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// MudBlazor dialog instance for closing
+    /// </summary>
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+
+    /// <summary>
+    /// Event callback invoked when marker is successfully created
+    /// </summary>
+    [Parameter] public EventCallback<CustomMarkerViewModel?> OnMarkerCreated { get; set; }
+
+    /// <summary>
+    /// Map ID where marker will be placed
+    /// </summary>
+    [Parameter] public int MapId { get; set; }
+
+    /// <summary>
+    /// Grid coordinate X
+    /// </summary>
+    [Parameter] public int CoordX { get; set; }
+
+    /// <summary>
+    /// Grid coordinate Y
+    /// </summary>
+    [Parameter] public int CoordY { get; set; }
+
+    /// <summary>
+    /// Position X within grid (0-100)
+    /// </summary>
+    [Parameter] public int X { get; set; }
+
+    /// <summary>
+    /// Position Y within grid (0-100)
+    /// </summary>
+    [Parameter] public int Y { get; set; }
+
+    private string title = string.Empty;
+    private string description = string.Empty;
+    private string selectedIcon = string.Empty;
+    private List<string> availableIcons = new();
+    private bool loadingIcons = true;
+    private bool isCreating = false;
+
+    /// <summary>
+    /// Load available icons when dialog is initialized
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAvailableIconsAsync();
+    }
+
+    /// <summary>
+    /// Fetch available marker icons from API
+    /// </summary>
+    private async Task LoadAvailableIconsAsync()
+    {
+        loadingIcons = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/map/api/v1/custom-marker-icons");
+
+            if (response.IsSuccessStatusCode)
+            {
+                availableIcons = await response.Content.ReadFromJsonAsync<List<string>>(JsonOptions)
+                    ?? new();
+
+                // Leave selectedIcon empty - user must search and select
+            }
+            else
+            {
+                Snackbar.Add("Failed to load marker icons", Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading icons: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            loadingIcons = false;
+        }
+    }
+
+    /// <summary>
+    /// Search function for icon autocomplete - filters icons by filename
+    /// Prioritizes exact matches, then starts-with matches, then contains matches
+    /// MudBlazor 8.x requires CancellationToken parameter
+    /// </summary>
+    private Task<IEnumerable<string>> SearchIcons(string searchText, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            // Return first 50 icons when no search
+            return Task.FromResult(availableIcons.Take(50));
+        }
+
+        // Search by filename (case-insensitive) with prioritization:
+        // 1. Exact matches first
+        // 2. Starts-with matches second
+        // 3. Contains matches last
+        var searchLower = searchText.ToLowerInvariant();
+        var results = availableIcons
+            .Distinct() // Remove any duplicates from source list
+            .Select(icon => new
+            {
+                Icon = icon,
+                FileName = System.IO.Path.GetFileNameWithoutExtension(icon).ToLowerInvariant(),
+                Priority = GetSearchPriority(System.IO.Path.GetFileNameWithoutExtension(icon).ToLowerInvariant(), searchLower)
+            })
+            .Where(x => x.Priority > 0)
+            .OrderBy(x => x.Priority)
+            .ThenBy(x => x.FileName)
+            .Select(x => x.Icon)
+            .Distinct() // Ensure no duplicates in results
+            .Take(50);
+
+        return Task.FromResult(results);
+    }
+
+    /// <summary>
+    /// Calculate search priority (lower is better)
+    /// </summary>
+    private static int GetSearchPriority(string fileName, string searchLower)
+    {
+        if (fileName == searchLower) return 1;           // Exact match
+        if (fileName.StartsWith(searchLower)) return 2;  // Starts with
+        if (fileName.Contains(searchLower)) return 3;    // Contains
+        return 0; // No match
+    }
+
+    /// <summary>
+    /// Create the custom marker via API
+    /// </summary>
+    private async Task Create()
+    {
+        // Validate required fields
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            Snackbar.Add("Title is required", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(selectedIcon))
+        {
+            Snackbar.Add("Please select an icon", Severity.Warning);
+            return;
+        }
+
+        isCreating = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+
+            // Build request DTO
+            var dto = new
+            {
+                MapId = MapId,
+                CoordX = CoordX,
+                CoordY = CoordY,
+                X = X,
+                Y = Y,
+                Title = title.Trim(),
+                Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+                Icon = selectedIcon
+            };
+
+            var json = JsonSerializer.Serialize(dto, JsonOptions);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            var response = await httpClient.PostAsync("/map/api/v1/custom-markers", content);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Marker '{title}' created successfully", Severity.Success);
+
+                CustomMarkerViewModel? createdMarker = null;
+                try
+                {
+                    createdMarker = await response.Content.ReadFromJsonAsync<CustomMarkerViewModel>(JsonOptions);
+                }
+                catch (Exception ex)
+                {
+                    Snackbar.Add($"Warning: could not parse created marker response ({ex.Message}).", Severity.Warning);
+                }
+
+                if (createdMarker != null)
+                {
+                    await OnMarkerCreated.InvokeAsync(createdMarker);
+                }
+                else
+                {
+                    await OnMarkerCreated.InvokeAsync(null);
+                }
+
+                MudDialog.Close();
+            }
+            else
+            {
+                var errorMsg = await response.Content.ReadAsStringAsync();
+                Snackbar.Add($"Failed to create marker: {errorMsg}", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error creating marker: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isCreating = false;
+        }
+    }
+
+    /// <summary>
+    /// Cancel the dialog
+    /// </summary>
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+}
+

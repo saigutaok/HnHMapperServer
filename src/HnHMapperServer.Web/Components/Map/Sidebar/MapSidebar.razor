@@ -1,0 +1,241 @@
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Components.Map.Sidebar
+@using MudBlazor
+
+<!-- Right-anchored drawer for all sidebar functionality -->
+<MudDrawer @bind-Open="@IsOpen"
+           Anchor="Anchor.End"
+           Variant="DrawerVariant.Persistent"
+           Width="min(400px, 85vw)"
+           Elevation="2"
+           ClipMode="DrawerClipMode.Never"
+           Class="map-sidebar">
+    <MudDrawerHeader Class="drawer-header">
+        <MudPaper Elevation="0" Class="pa-2">
+            <!-- Close button for mobile (visible only on small screens) -->
+            <div class="mobile-close-button">
+                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                               Color="Color.Default"
+                               OnClick="@(() => IsOpenChanged.InvokeAsync(false))"
+                               Title="Close sidebar"
+                               Size="Size.Large" />
+            </div>
+            
+            <MudGrid Spacing="2">
+                <!-- Players Button -->
+                <MudItem xs="6">
+                    <MudButton OnClick="@(() => OnModeChanged.InvokeAsync(SidebarMode.Players))"
+                               Variant="@(CurrentMode == SidebarMode.Players ? Variant.Filled : Variant.Outlined)"
+                               Color="@(CurrentMode == SidebarMode.Players ? Color.Primary : Color.Default)"
+                               FullWidth="true"
+                               Size="Size.Large"
+                               Class="mode-button">
+                        <MudStack Spacing="1" AlignItems="AlignItems.Center" Style="width: 100%;">
+                            <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Medium" />
+                            <MudText Typo="Typo.caption" Style="font-weight: 500;">Players</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text"
+                                     Style="@(Characters.Count > 0 ? "" : "visibility: hidden;")">
+                                @(Characters.Count > 0 ? Characters.Count.ToString() : "0")
+                            </MudChip>
+                        </MudStack>
+                    </MudButton>
+                </MudItem>
+
+                <!-- Markers Button -->
+                <MudItem xs="6">
+                    <MudButton OnClick="@(() => OnModeChanged.InvokeAsync(SidebarMode.Markers))"
+                               Variant="@(CurrentMode == SidebarMode.Markers ? Variant.Filled : Variant.Outlined)"
+                               Color="@(CurrentMode == SidebarMode.Markers ? Color.Primary : Color.Default)"
+                               FullWidth="true"
+                               Size="Size.Large"
+                               Class="mode-button">
+                        <MudStack Spacing="1" AlignItems="AlignItems.Center" Style="width: 100%;">
+                            <MudIcon Icon="@Icons.Material.Filled.Place" Size="Size.Medium" />
+                            <MudText Typo="Typo.caption" Style="font-weight: 500;">Markers</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Text"
+                                     Style="@(Markers.Count(m => !m.Hidden) > 0 ? "" : "visibility: hidden;")">
+                                @(Markers.Count(m => !m.Hidden) > 0 ? Markers.Count(m => !m.Hidden).ToString() : "0")
+                            </MudChip>
+                        </MudStack>
+                    </MudButton>
+                </MudItem>
+
+                <!-- Layers Button -->
+                <MudItem xs="6">
+                    <MudButton OnClick="@(() => OnModeChanged.InvokeAsync(SidebarMode.Layers))"
+                               Variant="@(CurrentMode == SidebarMode.Layers ? Variant.Filled : Variant.Outlined)"
+                               Color="@(CurrentMode == SidebarMode.Layers ? Color.Primary : Color.Default)"
+                               FullWidth="true"
+                               Size="Size.Large"
+                               Class="mode-button">
+                        <MudStack Spacing="1" AlignItems="AlignItems.Center" Style="width: 100%;">
+                            <MudIcon Icon="@Icons.Material.Filled.Layers" Size="Size.Medium" />
+                            <MudText Typo="Typo.caption" Style="font-weight: 500;">Layers</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text"
+                                     Style="visibility: hidden;">0</MudChip>
+                        </MudStack>
+                    </MudButton>
+                </MudItem>
+
+                <!-- Maps Button -->
+                <MudItem xs="6">
+                    <MudButton OnClick="@(() => OnModeChanged.InvokeAsync(SidebarMode.Maps))"
+                               Variant="@(CurrentMode == SidebarMode.Maps ? Variant.Filled : Variant.Outlined)"
+                               Color="@(CurrentMode == SidebarMode.Maps ? Color.Primary : Color.Default)"
+                               FullWidth="true"
+                               Size="Size.Large"
+                               Class="mode-button">
+                        <MudStack Spacing="1" AlignItems="AlignItems.Center" Style="width: 100%;">
+                            <MudIcon Icon="@Icons.Material.Filled.Map" Size="Size.Medium" />
+                            <MudText Typo="Typo.caption" Style="font-weight: 500;">Maps</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text"
+                                     Style="visibility: hidden;">0</MudChip>
+                        </MudStack>
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudDrawerHeader>
+    
+    <div class="drawer-content">
+        @if (CurrentMode == SidebarMode.Players)
+        {
+            <PlayersPanel Characters="@Characters"
+                          Maps="@Maps"
+                          IsFollowing="@IsFollowing"
+                          FollowingCharacterId="@FollowingCharacterId"
+                          OnPlayerSelected="@OnPlayerSelected"
+                          OnStopFollowing="@OnStopFollowing" />
+        }
+        else if (CurrentMode == SidebarMode.Markers)
+        {
+            <MarkersPanel Markers="@Markers"
+                          CustomMarkers="@CustomMarkers"
+                          Maps="@Maps"
+                          OnMarkerSelected="@OnMarkerSelected"
+                          OnCustomMarkerEdit="@OnCustomMarkerEdit"
+                          OnCustomMarkerDelete="@OnCustomMarkerDelete"
+                          OnCustomMarkerSelected="@OnCustomMarkerSelected" />
+        }
+        else if (CurrentMode == SidebarMode.Layers)
+        {
+            <LayersPanel State="@State"
+                         OnTogglePlayers="@OnTogglePlayers"
+                         OnTogglePlayerTooltips="@OnTogglePlayerTooltips"
+                         OnToggleMarkers="@OnToggleMarkers"
+                         OnToggleCustomMarkers="@OnToggleCustomMarkers"
+                         OnToggleThingwalls="@OnToggleThingwalls"
+                         OnToggleThingwallTooltips="@OnToggleThingwallTooltips"
+                         OnToggleQuests="@OnToggleQuests"
+                         OnToggleQuestTooltips="@OnToggleQuestTooltips" />
+        }
+        else if (CurrentMode == SidebarMode.Maps)
+        {
+            <MapsPanel State="@State"
+                       Maps="@Maps"
+                       SelectedMap="@SelectedMap"
+                       OverlayMap="@OverlayMap"
+                       OnMapSelected="@OnMapSelected"
+                       OnOverlayMapSelected="@OnOverlayMapSelected"
+                       OnZoomIn="@OnZoomIn"
+                       OnZoomOut="@OnZoomOut"
+                       OnResetView="@OnResetView"
+                       OnToggleGridCoordinates="@OnToggleGridCoordinates" />
+        }
+    </div>
+</MudDrawer>
+
+@code {
+    /// <summary>
+    /// Current map state (zoom, position, layer visibility, etc.)
+    /// </summary>
+    [Parameter] public MapState State { get; set; } = new();
+    
+    /// <summary>
+    /// List of all available maps
+    /// </summary>
+    [Parameter] public IReadOnlyList<MapInfoModel> Maps { get; set; } = Array.Empty<MapInfoModel>();
+    
+    /// <summary>
+    /// List of all markers (visible and hidden)
+    /// </summary>
+    [Parameter] public IReadOnlyList<MarkerModel> Markers { get; set; } = Array.Empty<MarkerModel>();
+    
+    /// <summary>
+    /// List of all custom markers (player-created markers)
+    /// </summary>
+    [Parameter] public IReadOnlyList<CustomMarkerViewModel> CustomMarkers { get; set; } = Array.Empty<CustomMarkerViewModel>();
+    
+    /// <summary>
+    /// List of all active characters/players
+    /// </summary>
+    [Parameter] public IReadOnlyList<CharacterModel> Characters { get; set; } = Array.Empty<CharacterModel>();
+    
+    /// <summary>
+    /// Whether the sidebar drawer is currently open
+    /// </summary>
+    [Parameter] public bool IsOpen { get; set; } = true;
+    
+    /// <summary>
+    /// Event callback when sidebar open state changes
+    /// </summary>
+    [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
+    
+    /// <summary>
+    /// Current active sidebar mode (Players, Markers, Layers, Maps)
+    /// </summary>
+    [Parameter] public SidebarMode CurrentMode { get; set; } = SidebarMode.Players;
+    
+    /// <summary>
+    /// Event callback when sidebar mode changes
+    /// </summary>
+    [Parameter] public EventCallback<SidebarMode> OnModeChanged { get; set; }
+    
+    /// <summary>
+    /// Whether follow mode is currently active
+    /// </summary>
+    [Parameter] public bool IsFollowing { get; set; }
+    
+    /// <summary>
+    /// ID of the character being followed (null if not following)
+    /// </summary>
+    [Parameter] public int? FollowingCharacterId { get; set; }
+    
+    /// <summary>
+    /// Currently selected map (for Maps panel)
+    /// </summary>
+    [Parameter] public MapInfoModel? SelectedMap { get; set; }
+    
+    /// <summary>
+    /// Currently selected overlay map (null if no overlay)
+    /// </summary>
+    [Parameter] public MapInfoModel? OverlayMap { get; set; }
+    
+    // Event callbacks for map selection and controls
+    [Parameter] public EventCallback<MapInfoModel?> OnMapSelected { get; set; }
+    [Parameter] public EventCallback<MapInfoModel?> OnOverlayMapSelected { get; set; }
+    [Parameter] public EventCallback OnZoomIn { get; set; }
+    [Parameter] public EventCallback OnZoomOut { get; set; }
+    [Parameter] public EventCallback OnResetView { get; set; }
+    [Parameter] public EventCallback<bool> OnToggleGridCoordinates { get; set; }
+    
+    // Event callbacks for layer toggles
+    [Parameter] public EventCallback<bool> OnTogglePlayers { get; set; }
+    [Parameter] public EventCallback<bool> OnTogglePlayerTooltips { get; set; }
+    [Parameter] public EventCallback<bool> OnToggleMarkers { get; set; }
+    [Parameter] public EventCallback<bool> OnToggleCustomMarkers { get; set; }
+    [Parameter] public EventCallback<bool> OnToggleThingwalls { get; set; }
+    [Parameter] public EventCallback<bool> OnToggleThingwallTooltips { get; set; }
+    [Parameter] public EventCallback<bool> OnToggleQuests { get; set; }
+    [Parameter] public EventCallback<bool> OnToggleQuestTooltips { get; set; }
+    
+    // Event callbacks for player/marker selection
+    [Parameter] public EventCallback<CharacterModel> OnPlayerSelected { get; set; }
+    [Parameter] public EventCallback<MarkerModel> OnMarkerSelected { get; set; }
+    [Parameter] public EventCallback<CustomMarkerViewModel> OnCustomMarkerEdit { get; set; }
+    [Parameter] public EventCallback<CustomMarkerViewModel> OnCustomMarkerDelete { get; set; }
+    [Parameter] public EventCallback<CustomMarkerViewModel> OnCustomMarkerSelected { get; set; }
+    [Parameter] public EventCallback OnStopFollowing { get; set; }
+}
+
+

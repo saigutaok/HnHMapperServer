@@ -1,0 +1,344 @@
+@page "/register"
+@rendermode InteractiveServer
+@using HnHMapperServer.Core.DTOs
+@using HnHMapperServer.Web.Services
+@inject IHttpClientFactory HttpClientFactory
+@inject NavigationManager NavigationManager
+@inject ISnackbar Snackbar
+@inject IInvitationService InvitationService
+
+<PageTitle>Register - HnH Mapper</PageTitle>
+
+<div class="auth-page">
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+    <MudPaper Elevation="0" Class="pa-8">
+        @if (_invitationValid)
+        {
+            <MudText Typo="Typo.h4" Align="Align.Center" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.PersonAdd" Class="me-2" />
+                Create Account
+            </MudText>
+
+            @if (_invitation != null)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">
+                    You've been invited to join <strong>@_invitation.TenantName</strong>
+                </MudAlert>
+            }
+            else if (string.IsNullOrWhiteSpace(InviteCode))
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">
+                    Register your account. An administrator will assign you to a tenant after registration.
+                </MudAlert>
+            }
+
+            <MudForm @ref="_form" @bind-IsValid="@_isFormValid">
+                <MudStack Spacing="4">
+                    <MudTextField @bind-Value="_username"
+                                  Label="Username"
+                                  Required="true"
+                                  RequiredError="Username is required"
+                                  Validation="@(new Func<string, string?>(ValidateUsername))"
+                                  Variant="Variant.Outlined"
+                                  HelperText="3-20 alphanumeric characters or underscore"
+                                  OnKeyPress="@HandleKeyPress" />
+
+                    <MudTextField @bind-Value="_password"
+                                  Label="Password"
+                                  InputType="InputType.Password"
+                                  Required="true"
+                                  Validation="@(new Func<string, string?>(ValidatePassword))"
+                                  Variant="Variant.Outlined"
+                                  HelperText="Minimum 6 characters"
+                                  OnKeyPress="@HandleKeyPress" />
+
+                    <MudTextField @bind-Value="_confirmPassword"
+                                  Label="Confirm Password"
+                                  InputType="InputType.Password"
+                                  Required="true"
+                                  Validation="@(new Func<string, string?>(ValidateConfirmPassword))"
+                                  Variant="Variant.Outlined"
+                                  OnKeyPress="@HandleKeyPress" />
+
+                    @if (!string.IsNullOrEmpty(_errorMessage))
+                    {
+                        <MudAlert Severity="Severity.Error" Dense="true">@_errorMessage</MudAlert>
+                    }
+
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               FullWidth="true"
+                               OnClick="HandleRegister"
+                               Disabled="@(!_isFormValid || _isRegistering)"
+                               Size="Size.Large">
+                        @if (_isRegistering)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            <span>Creating Account...</span>
+                        }
+                        else
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.PersonAdd" Class="me-2" />
+                            <span>Create Account</span>
+                        }
+                    </MudButton>
+
+                    @* Debug info *@
+                    @if (!_isFormValid)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
+                            Please fill in all required fields correctly. Form is currently invalid.
+                        </MudAlert>
+                    }
+
+                    <MudDivider />
+
+                    <MudText Align="Align.Center">
+                        Already have an account?
+                        <MudLink Href="/login" Color="Color.Primary">Sign in</MudLink>
+                    </MudText>
+                </MudStack>
+            </MudForm>
+        }
+        else if (_loading)
+        {
+            <div class="d-flex justify-center align-center" style="min-height: 300px;">
+                <MudProgressCircular Indeterminate="true" Size="Size.Large" />
+            </div>
+        }
+        else
+        {
+            <MudText Typo="Typo.h4" Align="Align.Center" Class="mb-4" Color="Color.Error">
+                <MudIcon Icon="@Icons.Material.Filled.Error" Class="me-2" />
+                Invalid Invitation
+            </MudText>
+
+            <MudAlert Severity="Severity.Error" Class="mb-4">
+                @_errorMessage
+            </MudAlert>
+
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Primary"
+                       FullWidth="true"
+                       Href="/login">
+                Return to Login
+            </MudButton>
+        }
+    </MudPaper>
+
+    @if (_invitationValid)
+    {
+        @if (_invitation != null)
+        {
+            <MudText Typo="Typo.caption" Align="Align.Center" Class="mt-4" Color="Color.Secondary">
+                Your account will be pending admin approval after registration.
+            </MudText>
+        }
+        else
+        {
+            <MudText Typo="Typo.caption" Align="Align.Center" Class="mt-4" Color="Color.Secondary">
+                Your account will be created and an administrator will assign you to a tenant.
+            </MudText>
+        }
+    }
+</MudContainer>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "invite")]
+    public string? InviteCode { get; set; }
+
+    private MudForm? _form;
+    private bool _isFormValid;
+    private bool _isRegistering;
+    private bool _loading = true;
+    private bool _invitationValid;
+
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _confirmPassword = string.Empty;
+    private string _errorMessage = string.Empty;
+
+    private HnHMapperServer.Core.DTOs.InvitationDto? _invitation;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Invitation code is now optional
+        // If no invitation code, user can register but will need SuperAdmin assignment
+        if (string.IsNullOrWhiteSpace(InviteCode))
+        {
+            _invitationValid = true; // Allow registration without invitation
+            _loading = false;
+            return;
+        }
+
+        // If invitation code provided, validate it
+        try
+        {
+            _invitation = await InvitationService.ValidateInvitationAsync(InviteCode);
+
+            // Check if invitation is valid
+            var isValid = _invitation != null &&
+                         _invitation.Status == "Active" &&
+                         _invitation.ExpiresAt > DateTime.UtcNow;
+
+            if (!isValid)
+            {
+                _errorMessage = _invitation == null
+                    ? "Invitation not found or has expired."
+                    : "This invitation has already been used or is no longer valid.";
+                _invitationValid = false;
+            }
+            else
+            {
+                _invitationValid = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Error validating invitation: {ex.Message}";
+            _invitationValid = false;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private string? ValidateUsername(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            return "Username is required";
+
+        if (username.Length < 3 || username.Length > 20)
+            return "Username must be 3-20 characters";
+
+        if (!System.Text.RegularExpressions.Regex.IsMatch(username, @"^[a-zA-Z0-9_]+$"))
+            return "Username can only contain letters, numbers, and underscores";
+
+        return null;
+    }
+
+    private string? ValidatePassword(string pwd)
+    {
+        if (string.IsNullOrWhiteSpace(pwd))
+            return "Password is required";
+
+        if (pwd.Length < 6)
+            return "Password must be at least 6 characters";
+
+        return null;
+    }
+
+    private string? ValidateConfirmPassword(string confirmPwd)
+    {
+        if (string.IsNullOrWhiteSpace(confirmPwd))
+            return "Please confirm your password";
+
+        if (confirmPwd != _password)
+            return "Passwords do not match";
+
+        return null;
+    }
+
+    private async Task HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && _isFormValid && !_isRegistering)
+        {
+            await HandleRegister();
+        }
+    }
+
+    private async Task HandleRegister()
+    {
+        // Validate form
+        if (_form != null)
+        {
+            await _form.Validate();
+            if (!_isFormValid)
+                return;
+        }
+
+        _errorMessage = string.Empty;
+        _isRegistering = true;
+
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var registerData = new
+            {
+                Username = _username,
+                Password = _password,
+                InviteCode = InviteCode
+            };
+
+            var response = await httpClient.PostAsJsonAsync("/api/auth/register", registerData);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var responseObj = System.Text.Json.JsonSerializer.Deserialize<RegisterResponse>(responseContent,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                // Check if user is awaiting assignment (no invitation code used)
+                if (responseObj?.AwaitingAssignment == true)
+                {
+                    // Navigate to pending assignment page
+                    NavigationManager.NavigateTo("/pending-assignment");
+                }
+                else
+                {
+                    // Store tenant name for pending approval page (invitation code flow)
+                    var tenantName = _invitation?.TenantName ?? "the organization";
+
+                    // Navigate to pending approval page
+                    NavigationManager.NavigateTo($"/register/pending?tenant={Uri.EscapeDataString(tenantName)}");
+                }
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                try
+                {
+                    var errorObj = System.Text.Json.JsonSerializer.Deserialize<ErrorResponse>(errorContent);
+                    _errorMessage = errorObj?.Error ?? "Registration failed";
+                }
+                catch
+                {
+                    _errorMessage = response.StatusCode switch
+                    {
+                        System.Net.HttpStatusCode.Conflict => "Username already exists",
+                        System.Net.HttpStatusCode.BadRequest => "Invalid invitation code or registration data",
+                        System.Net.HttpStatusCode.Forbidden => "This invitation has already been used",
+                        _ => "Registration failed. Please try again."
+                    };
+                }
+                StateHasChanged(); // Force UI update to display error message
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Error: {ex.Message}";
+            StateHasChanged(); // Force UI update to display error message
+        }
+        finally
+        {
+            _isRegistering = false;
+        }
+    }
+
+    private class ErrorResponse
+    {
+        public string Error { get; set; } = string.Empty;
+    }
+
+    private class RegisterResponse
+    {
+        public string UserId { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string? TenantId { get; set; }
+        public bool PendingApproval { get; set; }
+        public bool AwaitingAssignment { get; set; }
+        public string Message { get; set; } = string.Empty;
+    }
+}

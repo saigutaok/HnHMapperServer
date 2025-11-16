@@ -1,0 +1,64 @@
+@page "/admin"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "TenantAdmin")]
+@using HnHMapperServer.Web.Components.Admin
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Services
+@inject TenantContextService TenantContext
+
+<PageTitle>Admin Panel - HnH Mapper</PageTitle>
+<div class="admin-panel">
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudText Typo="Typo.h3" Class="mb-6">
+        <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" Class="me-2" />
+        Admin Panel
+    </MudText>
+
+    @if (TenantContext.CurrentTenant != null)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">
+            <strong>Organization:</strong> @TenantContext.CurrentTenant.Name |
+            <strong>Role:</strong> Administrator
+        </MudAlert>
+    }
+
+    <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-6">
+        @* User Management Tab *@
+        <MudTabPanel Text="Users" Icon="@Icons.Material.Filled.People">
+            <UserManagement />
+        </MudTabPanel>
+
+        @* Token Management Tab *@
+        <MudTabPanel Text="Tokens" Icon="@Icons.Material.Filled.Key">
+            <TokenManagement />
+        </MudTabPanel>
+
+        @* Invitation Management Tab *@
+        <MudTabPanel Text="Invitations" Icon="@Icons.Material.Filled.Mail">
+            <InvitationManagement />
+        </MudTabPanel>
+
+        @* Pending User Approvals Tab *@
+        <MudTabPanel Text="Pending Users" Icon="@Icons.Material.Filled.HowToReg">
+            <PendingUsers />
+        </MudTabPanel>
+
+        @* Tenant Settings Tab *@
+        <MudTabPanel Text="Settings" Icon="@Icons.Material.Filled.Settings">
+            <TenantSettings />
+        </MudTabPanel>
+
+        @* Tenant Audit Logs Tab *@
+        <MudTabPanel Text="Audit Logs" Icon="@Icons.Material.Filled.History">
+            <TenantAuditLogs />
+        </MudTabPanel>
+    </MudTabs>
+
+    <MudButton Variant="Variant.Text" Color="Color.Default" Href="/" Class="mt-4" StartIcon="@Icons.Material.Filled.ArrowBack">
+        Back to Dashboard
+    </MudButton>
+</MudContainer>
+</div>
+
+@code {
+}

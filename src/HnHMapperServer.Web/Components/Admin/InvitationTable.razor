@@ -1,0 +1,85 @@
+@using HnHMapperServer.Core.DTOs
+
+@if (IsLoading)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else if (!Invitations.Any())
+{
+    <MudAlert Severity="Severity.Info">
+        No @Status.ToLower() invitations found.
+    </MudAlert>
+}
+else
+{
+    <MudTable Items="@Invitations" Hover="true" Dense="true">
+        <HeaderContent>
+            <MudTh>Code</MudTh>
+            <MudTh>Created</MudTh>
+            <MudTh>Expires</MudTh>
+            @if (Status == "Used")
+            {
+                <MudTh>Used By</MudTh>
+                <MudTh>Used At</MudTh>
+            }
+            <MudTh>Actions</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Code">
+                <code>@MaskCode(context.InviteCode)</code>
+            </MudTd>
+            <MudTd DataLabel="Created">
+                @context.CreatedAt.ToString("yyyy-MM-dd HH:mm")
+            </MudTd>
+            <MudTd DataLabel="Expires">
+                @context.ExpiresAt.ToString("yyyy-MM-dd HH:mm")
+            </MudTd>
+            @if (Status == "Used")
+            {
+                <MudTd DataLabel="Used By">
+                    @(context.UsedBy ?? "-")
+                </MudTd>
+                <MudTd DataLabel="Used At">
+                    @(context.UsedAt?.ToString("yyyy-MM-dd HH:mm") ?? "-")
+                </MudTd>
+            }
+            <MudTd DataLabel="Actions">
+                @if (ShowCopy)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                  Color="Color.Primary"
+                                  Size="Size.Small"
+                                  Title="Copy invite link"
+                                  OnClick="@(() => OnCopyLink.InvokeAsync(context))" />
+                }
+                @if (ShowRevoke)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Block"
+                                  Color="Color.Error"
+                                  Size="Size.Small"
+                                  Title="Revoke invitation"
+                                  OnClick="@(() => OnRevoke.InvokeAsync(context))" />
+                }
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    [Parameter] public List<HnHMapperServer.Core.DTOs.InvitationDto> Invitations { get; set; } = new();
+    [Parameter] public string Status { get; set; } = string.Empty;
+    [Parameter] public EventCallback<HnHMapperServer.Core.DTOs.InvitationDto> OnCopyLink { get; set; }
+    [Parameter] public EventCallback<HnHMapperServer.Core.DTOs.InvitationDto> OnRevoke { get; set; }
+    [Parameter] public bool ShowCopy { get; set; }
+    [Parameter] public bool ShowRevoke { get; set; }
+    [Parameter] public bool IsLoading { get; set; }
+
+    private string MaskCode(string code)
+    {
+        if (code.Length <= 8)
+            return code;
+
+        // Show first 4 and last 4 characters
+        return $"{code.Substring(0, 4)}...{code.Substring(code.Length - 4)}";
+    }
+}

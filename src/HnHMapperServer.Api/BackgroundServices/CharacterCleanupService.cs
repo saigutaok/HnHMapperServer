@@ -1,0 +1,59 @@
+using HnHMapperServer.Services.Interfaces;
+
+namespace HnHMapperServer.Api.BackgroundServices;
+
+/// <summary>
+/// Background service that removes stale character positions every 10 seconds
+/// Matches the Go implementation: cleanChars() goroutine
+/// Multi-tenancy: Cleans stale characters for all active tenants
+/// </summary>
+public class CharacterCleanupService : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<CharacterCleanupService> _logger;
+
+    public CharacterCleanupService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<CharacterCleanupService> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Character Cleanup Service started");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var characterService = scope.ServiceProvider.GetRequiredService<ICharacterService>();
+                var tenantService = scope.ServiceProvider.GetRequiredService<ITenantService>();
+
+                // Get all active tenants
+                var tenants = await tenantService.GetAllTenantsAsync();
+
+                // Remove stale characters (older than 10 seconds) for each tenant
+                foreach (var tenant in tenants.Where(t => t.IsActive))
+                {
+                    characterService.CleanupStaleCharacters(TimeSpan.FromSeconds(10), tenant.Id);
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in character cleanup service");
+                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            }
+        }
+
+        _logger.LogInformation("Character Cleanup Service stopped");
+    }
+}

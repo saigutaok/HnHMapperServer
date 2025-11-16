@@ -1,0 +1,172 @@
+using HnHMapperServer.Core.Interfaces;
+using HnHMapperServer.Core.Models;
+using HnHMapperServer.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+
+namespace HnHMapperServer.Infrastructure.Repositories;
+
+public class MarkerRepository : IMarkerRepository
+{
+    private readonly ApplicationDbContext _context;
+    private readonly ITenantContextAccessor _tenantContext;
+
+    public MarkerRepository(ApplicationDbContext context, ITenantContextAccessor tenantContext)
+    {
+        _context = context;
+        _tenantContext = tenantContext;
+    }
+
+    public async Task<Marker?> GetMarkerAsync(int markerId)
+    {
+        // Explicit tenant filtering for defense-in-depth
+        var currentTenantId = _tenantContext.GetCurrentTenantId();
+
+        var query = _context.Markers.AsNoTracking();
+
+        // If tenant context is available, add explicit filter
+        if (!string.IsNullOrEmpty(currentTenantId))
+        {
+            query = query.Where(m => m.TenantId == currentTenantId);
+        }
+
+        var entity = await query.FirstOrDefaultAsync(m => m.Id == markerId);
+        return entity == null ? null : MapToDomain(entity);
+    }
+
+    public async Task<Marker?> GetMarkerByKeyAsync(string key)
+    {
+        // Explicit tenant filtering for defense-in-depth
+        var currentTenantId = _tenantContext.GetCurrentTenantId();
+
+        var query = _context.Markers.AsNoTracking();
+
+        // If tenant context is available, add explicit filter
+        if (!string.IsNullOrEmpty(currentTenantId))
+        {
+            query = query.Where(m => m.TenantId == currentTenantId);
+        }
+
+        var entity = await query.FirstOrDefaultAsync(m => m.Key == key);
+        return entity == null ? null : MapToDomain(entity);
+    }
+
+    public async Task<List<Marker>> GetAllMarkersAsync()
+    {
+        // Explicit tenant filtering for defense-in-depth
+        var currentTenantId = _tenantContext.GetCurrentTenantId();
+
+        var query = _context.Markers.AsNoTracking();
+
+        // If tenant context is available, add explicit filter
+        if (!string.IsNullOrEmpty(currentTenantId))
+        {
+            query = query.Where(m => m.TenantId == currentTenantId);
+        }
+
+        var entities = await query.ToListAsync();
+        return entities.Select(MapToDomain).ToList();
+    }
+
+    public async Task SaveMarkerAsync(Marker marker, string key)
+    {
+        // Marker Keys are client-generated and can be the same across tenants
+        // The UNIQUE constraint is on (Key, TenantId), so each tenant can have their own markers
+        var currentTenantId = _tenantContext.GetRequiredTenantId();
+
+        // Check if marker exists for current tenant (uses global query filter automatically)
+        var existing = await _context.Markers
+            .FirstOrDefaultAsync(m => m.Key == key && m.TenantId == currentTenantId);
+
+        if (existing != null)
+        {
+            // Update existing marker for this tenant
+            var entity = MapFromDomain(marker, key);
+            entity.Id = existing.Id;
+            _context.Entry(existing).CurrentValues.SetValues(entity);
+            await _context.SaveChangesAsync();
+
+            // Update the domain object with the ID
+            if (marker.Id == 0)
+            {
+                marker.Id = entity.Id;
+            }
+        }
+        else
+        {
+            // Insert new marker for this tenant
+            var entity = MapFromDomain(marker, key);
+            entity.Id = 0;  // Let database auto-generate ID (AUTOINCREMENT)
+            _context.Markers.Add(entity);
+            await _context.SaveChangesAsync();
+
+            // Update the domain object with the generated ID
+            if (marker.Id == 0)
+            {
+                marker.Id = entity.Id;
+            }
+        }
+    }
+
+    public async Task DeleteMarkerAsync(string key)
+    {
+        // Explicit tenant filtering for defense-in-depth
+        var currentTenantId = _tenantContext.GetCurrentTenantId();
+
+        var query = _context.Markers.AsQueryable();
+
+        // If tenant context is available, add explicit filter
+        if (!string.IsNullOrEmpty(currentTenantId))
+        {
+            query = query.Where(m => m.TenantId == currentTenantId);
+        }
+
+        var marker = await query.FirstOrDefaultAsync(m => m.Key == key);
+
+        if (marker != null)
+        {
+            _context.Markers.Remove(marker);
+            await _context.SaveChangesAsync();
+        }
+    }
+
+    public async Task<int> GetNextMarkerIdAsync()
+    {
+        // IMPORTANT: Marker IDs must be globally unique across all tenants
+        // because Markers.Id is a PRIMARY KEY, not tenant-scoped
+        var maxId = await _context.Markers
+            .IgnoreQueryFilters()  // Get global max ID, not tenant-scoped
+            .AsNoTracking()
+            .MaxAsync(m => (int?)m.Id);
+
+        return (maxId ?? 0) + 1;
+    }
+
+    private static Marker MapToDomain(MarkerEntity entity) => new Marker
+    {
+        Id = entity.Id,
+        Name = entity.Name,
+        GridId = entity.GridId,
+        Position = new Position(entity.PositionX, entity.PositionY),
+        Image = entity.Image,
+        Hidden = entity.Hidden,
+        MaxReady = entity.MaxReady,
+        MinReady = entity.MinReady,
+        Ready = entity.Ready
+    };
+
+    private MarkerEntity MapFromDomain(Marker marker, string key) => new MarkerEntity
+    {
+        Id = marker.Id,
+        Key = key,
+        Name = marker.Name,
+        GridId = marker.GridId,
+        PositionX = marker.Position.X,
+        PositionY = marker.Position.Y,
+        Image = marker.Image,
+        Hidden = marker.Hidden,
+        MaxReady = marker.MaxReady,
+        MinReady = marker.MinReady,
+        Ready = marker.Ready,
+        TenantId = _tenantContext.GetRequiredTenantId()
+    };
+}

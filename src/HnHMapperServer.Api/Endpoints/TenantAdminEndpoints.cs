@@ -1,0 +1,783 @@
+using HnHMapperServer.Core.DTOs;
+using HnHMapperServer.Core.Enums;
+using HnHMapperServer.Core.Extensions;
+using HnHMapperServer.Core.Constants;
+using HnHMapperServer.Core.Interfaces;
+using HnHMapperServer.Infrastructure.Data;
+using HnHMapperServer.Services.Interfaces;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+
+namespace HnHMapperServer.Api.Endpoints;
+
+/// <summary>
+/// Tenant Admin endpoints for managing users within a tenant.
+/// Requires TenantAdmin role or SuperAdmin role.
+/// </summary>
+public static class TenantAdminEndpoints
+{
+    public static void MapTenantAdminEndpoints(this IEndpointRouteBuilder app)
+    {
+        var group = app.MapGroup("/api/tenants/{tenantId}")
+            .RequireAuthorization("TenantAdmin");
+
+        // IMPORTANT: More specific routes must come BEFORE less specific routes
+
+        // GET /api/tenants/{tenantId}/users/pending - List pending user approvals
+        group.MapGet("/users/pending", GetPendingUsers);
+
+        // POST /api/tenants/{tenantId}/users/{userId}/approve - Approve pending user
+        group.MapPost("/users/{userId}/approve", ApproveUser);
+
+        // GET /api/tenants/{tenantId}/users - List all users in tenant
+        group.MapGet("/users", GetTenantUsers);
+
+        // PUT /api/tenants/{tenantId}/users/{userId}/permissions - Update user permissions
+        group.MapPut("/users/{userId}/permissions", UpdateUserPermissions);
+
+        // DELETE /api/tenants/{tenantId}/users/{userId} - Remove user from tenant
+        group.MapDelete("/users/{userId}", RemoveUserFromTenant);
+
+        // GET /api/tenants/{tenantId}/settings - Get tenant settings
+        group.MapGet("/settings", GetTenantSettings);
+
+        // PUT /api/tenants/{tenantId}/settings - Update tenant settings
+        group.MapPut("/settings", UpdateTenantSettings);
+
+        // POST /api/tenants/{tenantId}/config/main-map - Set main map
+        group.MapPost("/config/main-map", SetMainMap);
+
+        // GET /api/tenants/{tenantId}/audit-logs - Get tenant audit logs
+        group.MapGet("/audit-logs", GetTenantAuditLogs);
+
+        // GET /api/tenants/{tenantId}/tokens - List all tokens for tenant
+        group.MapGet("/tokens", GetTenantTokens);
+
+        // DELETE /api/tenants/{tenantId}/tokens/{token} - Revoke a token
+        group.MapDelete("/tokens/{token}", RevokeToken);
+    }
+
+    /// <summary>
+    /// GET /api/tenants/{tenantId}/users
+    /// Lists all users in the specified tenant with their roles and permissions.
+    /// </summary>
+    private static async Task<IResult> GetTenantUsers(
+        string tenantId,
+        ApplicationDbContext db,
+        UserManager<IdentityUser> userManager,
+        HttpContext context)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        // Query tenant users with permissions
+        var tenantUsers = await db.TenantUsers
+            .Where(tu => tu.TenantId == tenantId)
+            .Include(tu => tu.Permissions)
+            .ToListAsync();
+
+        var userDtos = new List<TenantUserDto>();
+
+        foreach (var tenantUser in tenantUsers)
+        {
+            var identityUser = await userManager.FindByIdAsync(tenantUser.UserId);
+            if (identityUser == null) continue;
+
+            userDtos.Add(new TenantUserDto
+            {
+                Id = tenantUser.Id,
+                UserId = tenantUser.UserId,
+                Username = identityUser.UserName ?? string.Empty,
+                TenantId = tenantUser.TenantId,
+                Role = tenantUser.Role.ToClaimValue(),
+                Permissions = tenantUser.Permissions.Select(p => p.Permission.ToClaimValue()).ToList(),
+                JoinedAt = tenantUser.JoinedAt,
+                PendingApproval = tenantUser.PendingApproval
+            });
+        }
+
+        return Results.Ok(userDtos);
+    }
+
+    /// <summary>
+    /// GET /api/tenants/{tenantId}/users/pending
+    /// Lists all users pending approval in the specified tenant.
+    /// </summary>
+    private static async Task<IResult> GetPendingUsers(
+        string tenantId,
+        ApplicationDbContext db,
+        UserManager<IdentityUser> userManager,
+        HttpContext context,
+        ILogger<Program> logger)
+    {
+        logger.LogInformation("GetPendingUsers called for tenant: {TenantId}", tenantId);
+
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                logger.LogWarning("Access denied: User tenant {CurrentTenant} doesn't match requested {TenantId}", currentTenantId, tenantId);
+                return Results.Forbid();
+            }
+        }
+
+        // Query pending users (JoinedAt == default means pending)
+        var pendingTenantUsers = await db.TenantUsers
+            .Where(tu => tu.TenantId == tenantId && tu.JoinedAt == default)
+            .ToListAsync();
+
+        var pendingUserDtos = new List<object>();
+
+        foreach (var tenantUser in pendingTenantUsers)
+        {
+            var identityUser = await userManager.FindByIdAsync(tenantUser.UserId);
+            if (identityUser == null) continue;
+
+            // Find the invitation used for registration
+            var invitation = await db.TenantInvitations
+                .FirstOrDefaultAsync(i => i.TenantId == tenantId && i.UsedBy == tenantUser.UserId);
+
+            // Use invitation UsedAt as RequestedAt if available, otherwise use minimum value
+            var requestedAt = invitation?.UsedAt ?? DateTime.MinValue;
+
+            pendingUserDtos.Add(new
+            {
+                UserId = tenantUser.UserId,
+                Username = identityUser.UserName ?? string.Empty,
+                RequestedAt = requestedAt,
+                InvitationCode = invitation?.InviteCode
+            });
+        }
+
+        return Results.Ok(pendingUserDtos);
+    }
+
+    /// <summary>
+    /// POST /api/tenants/{tenantId}/users/{userId}/approve
+    /// Approves a pending user and grants specified permissions.
+    /// </summary>
+    private static async Task<IResult> ApproveUser(
+        string tenantId,
+        string userId,
+        ApproveTenantUserDto dto,
+        ApplicationDbContext db,
+        HttpContext context,
+        IAuditService auditService,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst(AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        // Validate permissions (case-insensitive)
+        var validPermissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            Permission.Map.ToClaimValue(),
+            Permission.Markers.ToClaimValue(),
+            Permission.Pointer.ToClaimValue(),
+            Permission.Upload.ToClaimValue(),
+            Permission.Writer.ToClaimValue()
+        };
+        foreach (var permission in dto.Permissions)
+        {
+            if (!validPermissions.Contains(permission))
+            {
+                return Results.BadRequest(new { error = $"Invalid permission: {permission}" });
+            }
+        }
+
+        // Find pending user
+        var tenantUser = await db.TenantUsers
+            .Include(tu => tu.Permissions)
+            .FirstOrDefaultAsync(tu => tu.UserId == userId && tu.TenantId == tenantId && tu.JoinedAt == default);
+
+        if (tenantUser == null)
+        {
+            return Results.NotFound(new { error = "Pending user not found" });
+        }
+
+        // Approve user by setting JoinedAt
+        tenantUser.JoinedAt = DateTime.UtcNow;
+
+        // Add permissions
+        foreach (var permission in dto.Permissions)
+        {
+            db.TenantPermissions.Add(new HnHMapperServer.Core.Models.TenantPermissionEntity
+            {
+                TenantUserId = tenantUser.Id,
+                Permission = permission.ToPermission()
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        logger.LogInformation(
+            "Approved user {UserId} in tenant {TenantId} with permissions: {Permissions}",
+            userId, tenantId, string.Join(", ", dto.Permissions));
+
+        // Audit log
+        await auditService.LogAsync(new AuditEntry
+        {
+            TenantId = tenantId,
+            Action = "UserApproved",
+            EntityType = "User",
+            EntityId = userId,
+            NewValue = string.Join(", ", dto.Permissions)
+        });
+
+        return Results.Ok(new { message = "User approved successfully" });
+    }
+
+    /// <summary>
+    /// PUT /api/tenants/{tenantId}/users/{userId}/permissions
+    /// Updates the permissions for a user within the tenant.
+    /// Replaces all existing permissions with the new set.
+    /// </summary>
+    private static async Task<IResult> UpdateUserPermissions(
+        string tenantId,
+        string userId,
+        UpdateTenantUserPermissionsDto dto,
+        ApplicationDbContext db,
+        HttpContext context,
+        IAuditService auditService,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        // Validate permissions (case-insensitive)
+        var validPermissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            Permission.Map.ToClaimValue(),
+            Permission.Markers.ToClaimValue(),
+            Permission.Pointer.ToClaimValue(),
+            Permission.Upload.ToClaimValue(),
+            Permission.Writer.ToClaimValue()
+        };
+        foreach (var permission in dto.Permissions)
+        {
+            if (!validPermissions.Contains(permission))
+            {
+                return Results.BadRequest(new { error = $"Invalid permission: {permission}" });
+            }
+        }
+
+        // Find tenant user
+        var tenantUser = await db.TenantUsers
+            .Include(tu => tu.Permissions)
+            .FirstOrDefaultAsync(tu => tu.UserId == userId && tu.TenantId == tenantId);
+
+        if (tenantUser == null)
+        {
+            return Results.NotFound(new { error = "User not found in this tenant" });
+        }
+
+        // Capture old permissions for audit log
+        var oldPermissions = string.Join(", ", tenantUser.Permissions.Select(p => p.Permission.ToClaimValue()));
+
+        // Replace permissions (delete all, add new)
+        db.TenantPermissions.RemoveRange(tenantUser.Permissions);
+
+        foreach (var permission in dto.Permissions)
+        {
+            db.TenantPermissions.Add(new HnHMapperServer.Core.Models.TenantPermissionEntity
+            {
+                TenantUserId = tenantUser.Id,
+                Permission = permission.ToPermission()
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        logger.LogInformation(
+            "Updated permissions for user {UserId} in tenant {TenantId}. New permissions: {Permissions}",
+            userId, tenantId, string.Join(", ", dto.Permissions));
+
+        // Audit log
+        await auditService.LogAsync(new AuditEntry
+        {
+            TenantId = tenantId,
+            Action = "PermissionsUpdated",
+            EntityType = "User",
+            EntityId = userId,
+            OldValue = oldPermissions,
+            NewValue = string.Join(", ", dto.Permissions)
+        });
+
+        return Results.Ok(new { message = "Permissions updated successfully" });
+    }
+
+    /// <summary>
+    /// DELETE /api/tenants/{tenantId}/users/{userId}
+    /// Removes a user from the tenant.
+    /// Deletes TenantUser entry, associated permissions, and revokes tokens.
+    /// </summary>
+    private static async Task<IResult> RemoveUserFromTenant(
+        string tenantId,
+        string userId,
+        ApplicationDbContext db,
+        HttpContext context,
+        IAuditService auditService,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+
+            // Prevent self-removal
+            var currentUserId = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (currentUserId == userId)
+            {
+                return Results.BadRequest(new { error = "Cannot remove yourself from the tenant" });
+            }
+        }
+
+        // Find tenant user
+        var tenantUser = await db.TenantUsers
+            .Include(tu => tu.Permissions)
+            .FirstOrDefaultAsync(tu => tu.UserId == userId && tu.TenantId == tenantId);
+
+        if (tenantUser == null)
+        {
+            return Results.NotFound(new { error = "User not found in this tenant" });
+        }
+
+        // Prevent removal of last admin (unless SuperAdmin is doing it)
+        if (tenantUser.Role == TenantRole.TenantAdmin && !context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var adminCount = await db.TenantUsers
+                .Where(tu => tu.TenantId == tenantId && tu.Role == TenantRole.TenantAdmin)
+                .CountAsync();
+
+            if (adminCount <= 1)
+            {
+                return Results.BadRequest(new { error = "Cannot remove the last admin from the tenant" });
+            }
+        }
+
+        using (var transaction = await db.Database.BeginTransactionAsync())
+        {
+            try
+            {
+                // Delete permissions (cascade)
+                db.TenantPermissions.RemoveRange(tenantUser.Permissions);
+
+                // Delete tenant user
+                db.TenantUsers.Remove(tenantUser);
+
+                // Revoke tokens for this user in this tenant
+                var userTokens = await db.Tokens
+                    .Where(t => t.TenantId == tenantId && t.UserId == userId)
+                    .ToListAsync();
+
+                db.Tokens.RemoveRange(userTokens);
+
+                await db.SaveChangesAsync();
+
+                // Audit log (inside transaction)
+                await auditService.LogAsync(new AuditEntry
+                {
+                    TenantId = tenantId,
+                    Action = "UserRemoved",
+                    EntityType = "User",
+                    EntityId = userId,
+                    OldValue = $"Role: {tenantUser.Role.ToClaimValue()}, {userTokens.Count} tokens revoked"
+                });
+
+                await transaction.CommitAsync();
+
+                logger.LogInformation(
+                    "Removed user {UserId} from tenant {TenantId}. Revoked {TokenCount} tokens.",
+                    userId, tenantId, userTokens.Count);
+
+                return Results.Ok(new { message = "User removed from tenant successfully" });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                logger.LogError(ex, "Failed to remove user {UserId} from tenant {TenantId}", userId, tenantId);
+                return Results.Problem("Failed to remove user from tenant");
+            }
+        }
+    }
+
+    /// <summary>
+    /// GET /api/tenants/{tenantId}/settings
+    /// Gets tenant settings (name, storage quota, etc.)
+    /// </summary>
+    private static async Task<IResult> GetTenantSettings(
+        string tenantId,
+        ApplicationDbContext db,
+        HttpContext context,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId);
+        if (tenant == null)
+        {
+            return Results.NotFound(new { error = "Tenant not found" });
+        }
+
+        // Count active users
+        var userCount = await db.TenantUsers
+            .Where(tu => tu.TenantId == tenantId && tu.JoinedAt != default)
+            .CountAsync();
+
+        var tenantDto = new TenantDto
+        {
+            Id = tenant.Id,
+            Name = tenant.Name,
+            StorageQuotaMB = tenant.StorageQuotaMB,
+            CurrentStorageMB = tenant.CurrentStorageMB,
+            CreatedAt = tenant.CreatedAt,
+            IsActive = tenant.IsActive,
+            UserCount = userCount
+        };
+
+        return Results.Ok(tenantDto);
+    }
+
+    /// <summary>
+    /// PUT /api/tenants/{tenantId}/settings
+    /// Updates tenant settings (currently only name is editable by tenant admin)
+    /// </summary>
+    private static async Task<IResult> UpdateTenantSettings(
+        string tenantId,
+        UpdateTenantSettingsDto dto,
+        ApplicationDbContext db,
+        HttpContext context,
+        IAuditService auditService,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId);
+        if (tenant == null)
+        {
+            return Results.NotFound(new { error = "Tenant not found" });
+        }
+
+        // Only allow updating name (quota is managed by SuperAdmin)
+        if (!string.IsNullOrWhiteSpace(dto.Name))
+        {
+            var oldName = tenant.Name;
+            tenant.Name = dto.Name;
+            await db.SaveChangesAsync();
+            logger.LogInformation("Tenant {TenantId} name updated to: {Name}", tenantId, dto.Name);
+
+            // Audit log
+            await auditService.LogAsync(new AuditEntry
+            {
+                TenantId = tenantId,
+                Action = "TenantSettingsUpdated",
+                EntityType = "Tenant",
+                EntityId = tenantId,
+                OldValue = $"Name: {oldName}",
+                NewValue = $"Name: {dto.Name}"
+            });
+        }
+
+        return Results.Ok(new { message = "Settings updated successfully" });
+    }
+
+    /// <summary>
+    /// GET /api/tenants/{tenantId}/audit-logs
+    /// Gets audit logs for this tenant only
+    /// </summary>
+    private static async Task<IResult> GetTenantAuditLogs(
+        string tenantId,
+        IAuditService auditService,
+        UserManager<IdentityUser> userManager,
+        HttpContext context,
+        ILogger<Program> logger,
+        string? userId = null,
+        string? action = null,
+        string? entityType = null,
+        DateTime? since = null,
+        DateTime? until = null,
+        int limit = 500)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst(AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        // Query audit logs for this tenant using IAuditService
+        var logs = await auditService.GetLogsAsync(new AuditQuery
+        {
+            TenantId = tenantId,
+            UserId = userId,
+            Action = action,
+            EntityType = entityType,
+            Since = since,
+            Until = until,
+            Limit = limit
+        });
+
+        // Enrich with username
+        var enrichedLogs = new List<AuditLogDto>();
+
+        foreach (var log in logs)
+        {
+            var dto = new AuditLogDto
+            {
+                Timestamp = log.Timestamp,
+                UserId = log.UserId,
+                TenantId = log.TenantId,
+                Action = log.Action,
+                EntityType = log.EntityType,
+                EntityId = log.EntityId,
+                OldValue = log.OldValue,
+                NewValue = log.NewValue,
+                IpAddress = log.IpAddress,
+                UserAgent = log.UserAgent
+            };
+
+            // Resolve username (may be null if user deleted)
+            if (log.UserId != null)
+            {
+                var user = await userManager.FindByIdAsync(log.UserId);
+                dto.Username = user?.UserName;
+            }
+
+            // Tenant name not needed for tenant-scoped view
+            dto.TenantName = null;
+
+            enrichedLogs.Add(dto);
+        }
+
+        logger.LogInformation("Loaded {Count} audit logs for tenant {TenantId}", enrichedLogs.Count, tenantId);
+        return Results.Ok(enrichedLogs);
+    }
+
+    /// <summary>
+    /// GET /api/tenants/{tenantId}/tokens
+    /// Lists all authentication tokens for this tenant
+    /// </summary>
+    private static async Task<IResult> GetTenantTokens(
+        string tenantId,
+        ApplicationDbContext db,
+        UserManager<IdentityUser> userManager,
+        HttpContext context,
+        IConfigRepository configRepository,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        // Get the prefix configuration for URL construction
+        var prefix = await configRepository.GetValueAsync("prefix") ?? string.Empty;
+
+        var tokens = await db.Tokens
+            .Where(t => t.TenantId == tenantId)
+            .ToListAsync();
+
+        var tokenDtos = new List<object>();
+
+        foreach (var token in tokens)
+        {
+            var user = await userManager.FindByIdAsync(token.UserId);
+            if (user == null) continue;
+
+            // Get user's permissions in this tenant
+            var tenantUser = await db.TenantUsers
+                .Include(tu => tu.Permissions)
+                .FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == token.UserId);
+
+            var permissions = tenantUser?.Permissions.Select(p => p.Permission.ToClaimValue()).ToList() ?? new List<string>();
+
+            // Construct the full URL
+            var url = string.IsNullOrEmpty(prefix)
+                ? $"/client/{token.DisplayToken}"
+                : $"{prefix}/client/{token.DisplayToken}";
+
+            tokenDtos.Add(new
+            {
+                Token = token.DisplayToken,
+                Username = user.UserName ?? string.Empty,
+                Permissions = permissions,
+                Url = url
+            });
+        }
+
+        logger.LogInformation("Loaded {Count} tokens for tenant {TenantId}", tokenDtos.Count, tenantId);
+        return Results.Ok(tokenDtos);
+    }
+
+    /// <summary>
+    /// DELETE /api/tenants/{tenantId}/tokens/{token}
+    /// Revokes an authentication token
+    /// </summary>
+    private static async Task<IResult> RevokeToken(
+        string tenantId,
+        string token,
+        ApplicationDbContext db,
+        HttpContext context,
+        IAuditService auditService,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        var tokenEntity = await db.Tokens
+            .FirstOrDefaultAsync(t => t.DisplayToken == token && t.TenantId == tenantId);
+
+        if (tokenEntity == null)
+        {
+            return Results.NotFound(new { error = "Token not found" });
+        }
+
+        var revokedUserId = tokenEntity.UserId;
+
+        db.Tokens.Remove(tokenEntity);
+        await db.SaveChangesAsync();
+
+        logger.LogInformation("Revoked token for user {UserId} in tenant {TenantId}", revokedUserId, tenantId);
+
+        // Audit log
+        await auditService.LogAsync(new AuditEntry
+        {
+            TenantId = tenantId,
+            Action = "TokenRevoked",
+            EntityType = "Token",
+            EntityId = token,
+            OldValue = $"User: {revokedUserId}"
+        });
+
+        return Results.Ok(new { message = "Token revoked successfully" });
+    }
+
+    /// <summary>
+    /// POST /api/tenants/{tenantId}/config/main-map
+    /// Sets the main/default map for the tenant
+    /// </summary>
+    private static async Task<IResult> SetMainMap(
+        string tenantId,
+        SetMainMapDto dto,
+        ApplicationDbContext db,
+        Core.Interfaces.IConfigRepository configRepository,
+        HttpContext context,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst("TenantId")?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        // If mapId is provided, validate that the map exists and belongs to this tenant
+        if (dto.MapId.HasValue)
+        {
+            var map = await db.Maps
+                .FirstOrDefaultAsync(m => m.Id == dto.MapId.Value && m.TenantId == tenantId);
+
+            if (map == null)
+            {
+                return Results.NotFound(new { error = "Map not found or does not belong to this tenant" });
+            }
+        }
+
+        // Get current config
+        var config = await configRepository.GetConfigAsync();
+
+        // Update main map ID
+        config.MainMapId = dto.MapId;
+
+        // Save config
+        await configRepository.SaveConfigAsync(config);
+
+        logger.LogInformation("Tenant {TenantId} main map set to: {MapId}", tenantId, dto.MapId?.ToString() ?? "none");
+        return Results.Ok(new { message = "Main map updated successfully", mainMapId = dto.MapId });
+    }
+
+    /// <summary>
+    /// DTO for approving a pending user
+    /// </summary>
+    public sealed class ApproveTenantUserDto
+    {
+        public List<string> Permissions { get; set; } = new();
+    }
+
+    /// <summary>
+    /// DTO for updating tenant settings
+    /// </summary>
+    public sealed class UpdateTenantSettingsDto
+    {
+        public string? Name { get; set; }
+    }
+
+    /// <summary>
+    /// DTO for setting main map
+    /// </summary>
+    public sealed class SetMainMapDto
+    {
+        public int? MapId { get; set; }
+    }
+}

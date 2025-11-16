@@ -1,0 +1,56 @@
+@using MudBlazor
+
+<!-- Context menu for marker operations (shown on right-click on marker) -->
+@if (Visible)
+{
+    <div class="context-menu" style="position: fixed; left: @(Left)px; top: @(Top)px; z-index: 2000;">
+        <MudPaper Elevation="4">
+            <MudList T="string" Dense="true">
+                <MudListItem T="string" OnClick="@(() => OnHideMarker.InvokeAsync())">
+                    Hide marker
+                </MudListItem>
+                <MudListItem T="string" OnClick="@(() => OnDeleteMarker.InvokeAsync())">
+                    Delete marker
+                </MudListItem>
+            </MudList>
+        </MudPaper>
+    </div>
+}
+
+@code {
+    /// <summary>
+    /// Whether the context menu is visible
+    /// </summary>
+    [Parameter] public bool Visible { get; set; }
+    
+    /// <summary>
+    /// X position of the context menu in screen coordinates
+    /// </summary>
+    [Parameter] public int Left { get; set; }
+    
+    /// <summary>
+    /// Y position of the context menu in screen coordinates
+    /// </summary>
+    [Parameter] public int Top { get; set; }
+    
+    /// <summary>
+    /// ID of the marker being operated on
+    /// </summary>
+    [Parameter] public int MarkerId { get; set; }
+    
+    /// <summary>
+    /// Event callback when hide marker is selected
+    /// </summary>
+    [Parameter] public EventCallback OnHideMarker { get; set; }
+    
+    /// <summary>
+    /// Event callback when delete marker is selected
+    /// </summary>
+    [Parameter] public EventCallback OnDeleteMarker { get; set; }
+}
+
+
+
+
+
+

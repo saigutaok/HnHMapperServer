@@ -1,0 +1,277 @@
+@page "/superadmin/map/{TenantId}"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "SuperAdmin")]
+@using HnHMapperServer.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+@inject NavigationManager NavigationManager
+@inject ISnackbar Snackbar
+@inject ILogger<SuperAdminMapView> Logger
+
+<PageTitle>Tenant Map View - SuperAdmin</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="mt-4">
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-4">
+        <strong>SuperAdmin Cross-Tenant Viewing:</strong> You are viewing maps for tenant <code>@TenantId</code> (@_tenantName).
+        <MudLink Href="/superadmin" Class="ml-2">Back to SuperAdmin Panel</MudLink>
+    </MudAlert>
+
+    @if (_isLoading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else if (_error != null)
+    {
+        <MudAlert Severity="Severity.Error">
+            @_error
+        </MudAlert>
+    }
+    else if (_mapData != null)
+    {
+        <MudPaper Class="pa-4 mb-4">
+            <MudText Typo="Typo.h5" Class="mb-3">
+                <MudIcon Icon="@Icons.Material.Filled.Dashboard" Class="me-2" />
+                Tenant Overview
+            </MudText>
+            <MudGrid>
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Class="pa-3" Elevation="2">
+                        <MudText Typo="Typo.caption" Class="mb-1">Maps</MudText>
+                        <MudText Typo="Typo.h4">@_mapData.Maps.Count</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Class="pa-3" Elevation="2">
+                        <MudText Typo="Typo.caption" Class="mb-1">Game Markers</MudText>
+                        <MudText Typo="Typo.h4">@_mapData.Markers.Count</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Class="pa-3" Elevation="2">
+                        <MudText Typo="Typo.caption" Class="mb-1">Custom Markers</MudText>
+                        <MudText Typo="Typo.h4">@_customMarkers.Count</MudText>
+                    </MudPaper>
+                </MudItem>
+                <MudItem xs="12" sm="6" md="3">
+                    <MudPaper Class="pa-3" Elevation="2">
+                        <MudText Typo="Typo.caption" Class="mb-1">Main Map</MudText>
+                        <MudText Typo="Typo.h6">
+                            @if (_mapData.Config.MainMapId.HasValue)
+                            {
+                                var mainMap = _mapData.Maps.FirstOrDefault(m => m.ID == _mapData.Config.MainMapId.Value);
+                                @(mainMap?.MapInfo?.Name ?? "N/A")
+                            }
+                            else
+                            {
+                                <text>Not set</text>
+                            }
+                        </MudText>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-6">
+            <MudTabPanel Text="Maps" Icon="@Icons.Material.Filled.Map">
+                <MudTable T="MapInfoModel" Items="@_mapData.Maps" Hover="true" Dense="true">
+                    <HeaderContent>
+                        <MudTh>Map ID</MudTh>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Priority</MudTh>
+                        <MudTh>Main Map</MudTh>
+                        <MudTh>Revision</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Map ID">@context.ID</MudTd>
+                        <MudTd DataLabel="Name">@context.MapInfo.Name</MudTd>
+                        <MudTd DataLabel="Priority">@context.MapInfo.Priority</MudTd>
+                        <MudTd DataLabel="Main Map">
+                            @if (context.MapInfo.IsMainMap)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success">Main</MudChip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Revision">@context.MapInfo.Revision</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+
+            <MudTabPanel Text="Game Markers" Icon="@Icons.Material.Filled.LocationOn">
+                <MudTable T="MarkerModel" Items="@_mapData.Markers" Hover="true" Dense="true">
+                    <ToolBarContent>
+                        <MudSpacer />
+                        <MudText Typo="Typo.body2">Showing @_mapData.Markers.Count markers</MudText>
+                    </ToolBarContent>
+                    <HeaderContent>
+                        <MudTh>ID</MudTh>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Map ID</MudTh>
+                        <MudTh>Position</MudTh>
+                        <MudTh>Ready</MudTh>
+                        <MudTh>Hidden</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="ID">@context.Id</MudTd>
+                        <MudTd DataLabel="Name">
+                            @if (!string.IsNullOrEmpty(context.Image))
+                            {
+                                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                                    <img src="@context.Image" alt="@context.Name" style="width: 24px; height: 24px;" />
+                                    <span>@context.Name</span>
+                                </MudStack>
+                            }
+                            else
+                            {
+                                @context.Name
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Map ID">@context.Map</MudTd>
+                        <MudTd DataLabel="Position">(@context.Position.X, @context.Position.Y)</MudTd>
+                        <MudTd DataLabel="Ready">
+                            <MudChip T="string" Size="Size.Small" Color="@(context.Ready ? Color.Success : Color.Default)">
+                                @(context.Ready ? "Ready" : "Not Ready")
+                            </MudChip>
+                        </MudTd>
+                        <MudTd DataLabel="Hidden">
+                            @if (context.Hidden)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning">Hidden</MudChip>
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+
+            <MudTabPanel Text="Custom Markers" Icon="@Icons.Material.Filled.PushPin">
+                <MudTable T="CustomMarkerData" Items="@_customMarkers" Hover="true" Dense="true">
+                    <ToolBarContent>
+                        <MudSpacer />
+                        <MudText Typo="Typo.body2">Showing @_customMarkers.Count custom markers</MudText>
+                    </ToolBarContent>
+                    <HeaderContent>
+                        <MudTh>ID</MudTh>
+                        <MudTh>Title</MudTh>
+                        <MudTh>Map ID</MudTh>
+                        <MudTh>Location</MudTh>
+                        <MudTh>Icon</MudTh>
+                        <MudTh>Created By</MudTh>
+                        <MudTh>Placed</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="ID">@context.Id</MudTd>
+                        <MudTd DataLabel="Title">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.body2">@context.Title</MudText>
+                                @if (!string.IsNullOrEmpty(context.Description))
+                                {
+                                    <MudText Typo="Typo.caption" Class="text-muted">@context.Description</MudText>
+                                }
+                            </MudStack>
+                        </MudTd>
+                        <MudTd DataLabel="Map ID">@context.MapId</MudTd>
+                        <MudTd DataLabel="Location">Grid (@context.CoordX, @context.CoordY) / Pos (@context.X, @context.Y)</MudTd>
+                        <MudTd DataLabel="Icon">
+                            @if (!string.IsNullOrEmpty(context.Icon))
+                            {
+                                <img src="@context.Icon" alt="Icon" style="width: 24px; height: 24px;" />
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Created By">@context.CreatedBy</MudTd>
+                        <MudTd DataLabel="Placed">@context.PlacedAt.ToString("yyyy-MM-dd HH:mm")</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudTabPanel>
+        </MudTabs>
+
+        <MudAlert Severity="Severity.Info" Class="mt-4">
+            <strong>Note:</strong> This is a read-only view of tenant map data. Full interactive map viewing with tiles and real-time updates would require additional implementation.
+            For now, this view provides overview and statistics of the tenant's map data.
+        </MudAlert>
+    }
+
+    <MudButton Variant="Variant.Text" Color="Color.Default" Href="/superadmin" Class="mt-4" StartIcon="@Icons.Material.Filled.ArrowBack">
+        Back to SuperAdmin Panel
+    </MudButton>
+</MudContainer>
+
+@code {
+    [Parameter]
+    public string TenantId { get; set; } = string.Empty;
+
+    private MapViewData? _mapData;
+    private List<CustomMarkerData> _customMarkers = new();
+    private bool _isLoading = true;
+    private string? _error;
+    private string _tenantName = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadMapData();
+    }
+
+    private async Task LoadMapData()
+    {
+        _isLoading = true;
+        _error = null;
+
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+
+            // Load main map view data
+            var dataResponse = await httpClient.GetAsync($"/api/superadmin/tenants/{TenantId}/map-view-data");
+            if (!dataResponse.IsSuccessStatusCode)
+            {
+                _error = $"Failed to load map data: {dataResponse.StatusCode}";
+                Logger.LogWarning("Failed to load map data for tenant {TenantId}: {StatusCode}", TenantId, dataResponse.StatusCode);
+                return;
+            }
+
+            _mapData = await dataResponse.Content.ReadFromJsonAsync<MapViewData>();
+            _tenantName = TenantId; // We could fetch the tenant name from the API if needed
+
+            // Load custom markers
+            var markersResponse = await httpClient.GetAsync($"/api/superadmin/tenants/{TenantId}/custom-markers-data");
+            if (markersResponse.IsSuccessStatusCode)
+            {
+                _customMarkers = await markersResponse.Content.ReadFromJsonAsync<List<CustomMarkerData>>() ?? new();
+            }
+
+            Logger.LogInformation("SuperAdmin map view loaded for tenant {TenantId} ({MapCount} maps, {MarkerCount} markers)",
+                TenantId, _mapData?.Maps?.Count ?? 0, _mapData?.Markers?.Count ?? 0);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error loading map data: {ex.Message}";
+            Logger.LogError(ex, "Error loading map data for tenant {TenantId}", TenantId);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    public class MapViewData
+    {
+        public List<MarkerModel> Markers { get; set; } = new();
+        public List<MapInfoModel> Maps { get; set; } = new();
+        public MapConfig Config { get; set; } = new();
+    }
+
+    public class CustomMarkerData
+    {
+        public int Id { get; set; }
+        public int MapId { get; set; }
+        public string GridId { get; set; } = string.Empty;
+        public int CoordX { get; set; }
+        public int CoordY { get; set; }
+        public int X { get; set; }
+        public int Y { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public string Icon { get; set; } = string.Empty;
+        public string CreatedBy { get; set; } = string.Empty;
+        public DateTime PlacedAt { get; set; }
+        public DateTime UpdatedAt { get; set; }
+        public bool Hidden { get; set; }
+    }
+}

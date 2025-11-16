@@ -1,0 +1,14 @@
+using HnHMapperServer.Core.Models;
+
+namespace HnHMapperServer.Core.Interfaces;
+
+public interface IGridRepository
+{
+    Task<GridData?> GetGridAsync(string gridId);
+    Task SaveGridAsync(GridData gridData);
+    Task DeleteGridAsync(string gridId);
+    Task<List<GridData>> GetAllGridsAsync();
+    Task<List<GridData>> GetGridsByMapAsync(int mapId);
+    Task DeleteGridsByMapAsync(int mapId);
+    Task<bool> AnyGridsExistAsync();
+}

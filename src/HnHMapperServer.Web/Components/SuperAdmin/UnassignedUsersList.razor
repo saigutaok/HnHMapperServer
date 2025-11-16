@@ -1,0 +1,170 @@
+@using HnHMapperServer.Web.Components.SuperAdmin
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Core.DTOs
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudStack Spacing="3">
+    <MudText Typo="Typo.h5">
+        <MudIcon Icon="@Icons.Material.Filled.PersonAddDisabled" Class="me-2" />
+        Unassigned Users
+    </MudText>
+
+    <MudAlert Severity="Severity.Info" Dense="true">
+        These users have registered but are not yet assigned to any tenant.
+        Assign them to a tenant to grant access.
+    </MudAlert>
+
+    @if (_loading)
+    {
+        <div class="d-flex justify-center align-center" style="min-height: 300px;">
+            <MudProgressCircular Indeterminate="true" Size="Size.Large" />
+        </div>
+    }
+    else if (_unassignedUsers.Count == 0)
+    {
+        <MudAlert Severity="Severity.Success" Dense="true" Class="mt-4">
+            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="me-2" />
+            No unassigned users. All registered users have been assigned to tenants.
+        </MudAlert>
+    }
+    else
+    {
+        <MudTable Items="_unassignedUsers"
+                  Hover="true"
+                  Breakpoint="Breakpoint.Sm"
+                  Dense="true"
+                  Elevation="0"
+                  Class="mt-2">
+            <HeaderContent>
+                <MudTh>Username</MudTh>
+                <MudTh>Registered</MudTh>
+                <MudTh Style="text-align: right;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Username">
+                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Class="me-2" />
+                    @context.Username
+                </MudTd>
+                <MudTd DataLabel="Registered">
+                    @if (context.RegisteredAt.HasValue)
+                    {
+                        <MudText Typo="Typo.body2">@context.RegisteredAt.Value.ToString("yyyy-MM-dd HH:mm")</MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Unknown</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Actions" Style="text-align: right;">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               OnClick="@(() => OpenAssignDialog(context))"
+                               StartIcon="@Icons.Material.Filled.PersonAdd">
+                        Assign to Tenant
+                    </MudButton>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+
+    <MudButton Variant="Variant.Outlined"
+               Color="Color.Default"
+               OnClick="LoadUnassignedUsers"
+               StartIcon="@Icons.Material.Filled.Refresh"
+               Disabled="@_loading"
+               Class="mt-2">
+        Refresh
+    </MudButton>
+</MudStack>
+
+@code {
+    private List<UnassignedUserDto> _unassignedUsers = new();
+    private List<TenantListDto> _tenants = new();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUnassignedUsers();
+        await LoadTenants();
+    }
+
+    private async Task LoadUnassignedUsers()
+    {
+        _loading = true;
+
+        try
+        {
+            var apiClient = HttpClientFactory.CreateClient("API");
+            var response = await apiClient.GetAsync("/api/superadmin/users/unassigned");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var users = await response.Content.ReadFromJsonAsync<List<UnassignedUserDto>>(
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                _unassignedUsers = users ?? new List<UnassignedUserDto>();
+            }
+            else
+            {
+                Snackbar.Add($"Failed to load unassigned users: {response.StatusCode}", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading unassigned users: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadTenants()
+    {
+        try
+        {
+            var apiClient = HttpClientFactory.CreateClient("API");
+            var response = await apiClient.GetAsync("/api/superadmin/tenants");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var tenants = await response.Content.ReadFromJsonAsync<List<TenantListDto>>(
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                _tenants = tenants ?? new List<TenantListDto>();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading tenants: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OpenAssignDialog(UnassignedUserDto user)
+    {
+        var parameters = new DialogParameters
+        {
+            ["User"] = user,
+            ["Tenants"] = _tenants
+        };
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true
+        };
+
+        var dialog = await DialogService.ShowAsync<AssignUserDialog>("Assign User to Tenant", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            // Refresh the list after successful assignment
+            await LoadUnassignedUsers();
+        }
+    }
+}

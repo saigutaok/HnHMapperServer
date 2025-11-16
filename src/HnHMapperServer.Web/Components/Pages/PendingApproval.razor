@@ -1,0 +1,62 @@
+@page "/register/pending"
+@rendermode InteractiveServer
+@inject NavigationManager NavigationManager
+
+<PageTitle>Registration Pending - HnH Mapper</PageTitle>
+
+<div class="auth-page">
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-8">
+    <MudPaper Elevation="0" Class="pa-8 text-center">
+        <MudIcon Icon="@Icons.Material.Filled.HourglassEmpty"
+                 Color="Color.Warning"
+                 Size="Size.Large"
+                 Class="mb-4" />
+
+        <MudText Typo="Typo.h4" Class="mb-4">
+            Registration Pending Approval
+        </MudText>
+
+        <MudAlert Severity="Severity.Success" Class="mb-4">
+            Your account has been created successfully!
+        </MudAlert>
+
+        <MudText Typo="Typo.body1" Class="mb-4">
+            @if (!string.IsNullOrEmpty(_tenantName))
+            {
+                <text>You've registered for <strong>@_tenantName</strong>.</text>
+            }
+            else
+            {
+                <text>You've successfully registered.</text>
+            }
+        </MudText>
+
+        <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
+            A tenant administrator needs to approve your account before you can log in.
+            You will receive an email notification once your account has been approved.
+        </MudText>
+
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-6">
+            <strong>Note:</strong> Pending registrations are automatically rejected after 7 days if not approved.
+        </MudAlert>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   FullWidth="true"
+                   Href="/login"
+                   Size="Size.Large">
+            <MudIcon Icon="@Icons.Material.Filled.Login" Class="me-2" />
+            Return to Login
+        </MudButton>
+    </MudPaper>
+
+    <MudText Typo="Typo.caption" Align="Align.Center" Class="mt-4" Color="Color.Secondary">
+        If you have any questions, please contact the person who sent you the invitation.
+    </MudText>
+</MudContainer>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "tenant")]
+    public string? _tenantName { get; set; }
+}

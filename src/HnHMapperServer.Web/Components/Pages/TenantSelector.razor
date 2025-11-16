@@ -1,0 +1,213 @@
+@page "/tenant/select"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Services
+@inject ITenantService TenantService
+@inject TenantContextService TenantContext
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>Select Tenant - HnH Mapper</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="mt-8">
+    <MudPaper Elevation="0" Class="pa-8">
+        <MudText Typo="Typo.h4" Align="Align.Center" Class="mb-2">
+            <MudIcon Icon="@Icons.Material.Filled.Business" Class="me-2" />
+            Select Your Organization
+        </MudText>
+
+        <MudText Typo="Typo.body2" Align="Align.Center" Class="mb-6" Color="Color.Secondary">
+            You belong to multiple organizations. Please select one to continue.
+        </MudText>
+
+        @if (_loading)
+        {
+            <div class="d-flex justify-center align-center" style="min-height: 200px;">
+                <MudProgressCircular Indeterminate="true" Size="Size.Large" />
+            </div>
+        }
+        else if (_tenants.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning">
+                You don't have access to any organizations. Please contact an administrator.
+            </MudAlert>
+
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Primary"
+                       FullWidth="true"
+                       Class="mt-4"
+                       Href="/api/logout">
+                Logout
+            </MudButton>
+        }
+        else
+        {
+            <MudGrid>
+                @foreach (var tenant in _tenants)
+                {
+                    <MudItem xs="12" md="6">
+                        <MudCard Outlined="true" Class="cursor-pointer hover-card" @onclick="@(() => SelectTenant(tenant))">
+                            <MudCardContent>
+                                <div class="d-flex align-items-center mb-2">
+                                    <MudIcon Icon="@GetTenantIcon(tenant.Id)" Size="Size.Large" Class="me-3" />
+                                    <div>
+                                        <MudText Typo="Typo.h6">@tenant.Name</MudText>
+                                        <MudChip T="string" Size="Size.Small" Color="@GetRoleColor(tenant.Role)">@tenant.Role</MudChip>
+                                    </div>
+                                </div>
+
+                                <MudDivider Class="my-2" />
+
+                                <MudText Typo="Typo.caption" Class="mb-1"><strong>Permissions:</strong></MudText>
+                                <div class="d-flex flex-wrap gap-1">
+                                    @if (tenant.Permissions.Count > 0)
+                                    {
+                                        @foreach (var permission in tenant.Permissions)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">@permission</MudChip>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">No permissions</MudText>
+                                    }
+                                </div>
+
+                                @if (tenant.StorageQuotaMB > 0)
+                                {
+                                    <MudDivider Class="my-2" />
+                                    <MudText Typo="Typo.caption" Class="mb-1">
+                                        <strong>Storage:</strong> @tenant.StorageUsageMB.ToString("F1") / @tenant.StorageQuotaMB MB
+                                        (@tenant.StorageUsagePercentage%)
+                                    </MudText>
+                                    <MudProgressLinear Value="@tenant.StorageUsagePercentage"
+                                                       Color="@GetStorageColor(tenant.StorageUsagePercentage)"
+                                                       Size="Size.Small" />
+                                }
+                            </MudCardContent>
+                        </MudCard>
+                    </MudItem>
+                }
+            </MudGrid>
+
+            <MudDivider Class="my-4" />
+
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Default"
+                       FullWidth="true"
+                       Href="/api/logout">
+                <MudIcon Icon="@Icons.Material.Filled.Logout" Class="me-2" />
+                Logout
+            </MudButton>
+        }
+    </MudPaper>
+</MudContainer>
+
+<style>
+    .hover-card {
+        transition: all 0.2s ease-in-out;
+    }
+
+    .hover-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 16px rgba(0,0,0,0.15) !important;
+    }
+
+    .cursor-pointer {
+        cursor: pointer;
+    }
+</style>
+
+@code {
+    private List<TenantDto> _tenants = new();
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _tenants = await TenantService.GetUserTenantsAsync();
+
+            // If user has exactly one tenant, auto-select it
+            if (_tenants.Count == 1)
+            {
+                await SelectTenant(_tenants[0]);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading tenants: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectTenant(TenantDto tenant)
+    {
+        try
+        {
+            var success = await TenantService.SelectTenantAsync(tenant.Id);
+            if (success)
+            {
+                TenantContext.SetCurrentTenant(tenant);
+                Snackbar.Add($"Selected {tenant.Name}", Severity.Success);
+
+                // Redirect to dashboard
+                Navigation.NavigateTo("/", forceLoad: true);
+            }
+            else
+            {
+                Snackbar.Add("Failed to select tenant", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error selecting tenant: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string GetTenantIcon(string tenantId)
+    {
+        var parts = tenantId.Split('-');
+        if (parts.Length == 0) return Icons.Material.Filled.Business;
+
+        return parts[0].ToLower() switch
+        {
+            "warrior" => Icons.Material.Filled.Shield,
+            "dragon" => "🐉",
+            "wizard" => "🧙",
+            "castle" => "🏰",
+            "sword" => "⚔️",
+            "shield" => Icons.Material.Filled.Shield,
+            "crown" => "👑",
+            "hammer" => "🔨",
+            "bow" => "🏹",
+            "staff" => "🪄",
+            _ => Icons.Material.Filled.Business
+        };
+    }
+
+    private Color GetRoleColor(string role)
+    {
+        return role.ToLower() switch
+        {
+            "superadmin" => Color.Error,
+            "tenantadmin" => Color.Primary,
+            "tenantuser" => Color.Default,
+            _ => Color.Default
+        };
+    }
+
+    private Color GetStorageColor(int percentage)
+    {
+        return percentage switch
+        {
+            >= 90 => Color.Error,
+            >= 70 => Color.Warning,
+            _ => Color.Success
+        };
+    }
+}

@@ -1,0 +1,172 @@
+@using HnHMapperServer.Core.DTOs
+@using HnHMapperServer.Core.Enums
+@using HnHMapperServer.Core.Extensions
+@using TenantUserDto = HnHMapperServer.Core.DTOs.TenantUserDto
+@using MudBlazor
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject ILogger<EditUserPermissionsDialog> Logger
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">Edit Permissions: @User?.Username</MudText>
+
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Select the permissions for this user:
+        </MudText>
+
+        <MudStack Spacing="2">
+            <MudCheckBox @bind-Value="_mapPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Map</strong> - View maps in the frontend
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_markersPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Markers</strong> - See markers on the map
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_pointerPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Pointer</strong> - See character positions
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_uploadPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Upload</strong> - Upload tiles via game client
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_writerPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Writer</strong> - Edit/delete tiles and markers
+                </MudText>
+            </MudCheckBox>
+        </MudStack>
+
+        @if (_selectedPermissions.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                At least one permission must be selected.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="SavePermissions"
+                   Disabled="@(_selectedPermissions.Count == 0 || _isSaving)">
+            @if (_isSaving)
+            {
+                <MudProgressCircular Class="ms-n1" Size="Size.Small" Indeterminate="true" />
+                <MudText Class="ms-2">Saving...</MudText>
+            }
+            else
+            {
+                <MudText>Save Permissions</MudText>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public TenantUserDto? User { get; set; }
+    [Parameter] public string? TenantId { get; set; }
+    [Parameter] public bool IsSuperAdmin { get; set; } = false;
+    [Parameter] public string? SuperAdminTenantId { get; set; }
+
+    // Permission checkboxes
+    private bool _mapPermission = false;
+    private bool _markersPermission = false;
+    private bool _pointerPermission = false;
+    private bool _uploadPermission = false;
+    private bool _writerPermission = false;
+    private bool _isSaving = false;
+
+    private List<string> _selectedPermissions => new List<string>
+    {
+        _mapPermission ? Permission.Map.ToClaimValue() : null,
+        _markersPermission ? Permission.Markers.ToClaimValue() : null,
+        _pointerPermission ? Permission.Pointer.ToClaimValue() : null,
+        _uploadPermission ? Permission.Upload.ToClaimValue() : null,
+        _writerPermission ? Permission.Writer.ToClaimValue() : null
+    }.Where(p => p != null).Select(p => p!).ToList();
+
+    protected override void OnParametersSet()
+    {
+        if (User != null && User.Permissions != null)
+        {
+            // Pre-select existing permissions (case-insensitive check for compatibility)
+            _mapPermission = User.Permissions.Any(p => p.Equals(Permission.Map.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+            _markersPermission = User.Permissions.Any(p => p.Equals(Permission.Markers.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+            _pointerPermission = User.Permissions.Any(p => p.Equals(Permission.Pointer.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+            _uploadPermission = User.Permissions.Any(p => p.Equals(Permission.Upload.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+            _writerPermission = User.Permissions.Any(p => p.Equals(Permission.Writer.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private void Cancel()
+    {
+        MudDialog?.Cancel();
+    }
+
+    private async Task SavePermissions()
+    {
+        if (User == null)
+        {
+            Snackbar.Add("Invalid user", Severity.Error);
+            return;
+        }
+
+        // Determine which tenant ID to use
+        var effectiveTenantId = IsSuperAdmin ? SuperAdminTenantId : TenantId;
+        if (string.IsNullOrEmpty(effectiveTenantId))
+        {
+            Snackbar.Add("Invalid tenant", Severity.Error);
+            return;
+        }
+
+        _isSaving = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var request = new
+            {
+                permissions = _selectedPermissions
+            };
+
+            // Choose endpoint based on SuperAdmin mode
+            var endpoint = IsSuperAdmin
+                ? $"/api/superadmin/tenants/{effectiveTenantId}/users/{User.UserId}/permissions"
+                : $"/api/tenants/{effectiveTenantId}/users/{User.UserId}/permissions";
+
+            var response = await httpClient.PutAsJsonAsync(endpoint, request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Permissions updated for {User.Username}", Severity.Success);
+                MudDialog?.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to update permissions: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add($"Failed to update permissions: {response.StatusCode}", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error updating permissions for user {UserId}", User.UserId);
+            Snackbar.Add($"Error updating permissions: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+}

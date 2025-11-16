@@ -1,0 +1,253 @@
+@using HnHMapperServer.Web.Services
+@using HnHMapperServer.Web.Models
+@using Microsoft.AspNetCore.Components.Authorization
+@inject ITenantService TenantService
+@inject TenantContextService TenantContext
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject ILogger<PendingUsers> Logger
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="3">
+        <div class="d-flex justify-space-between align-center">
+            <MudText Typo="Typo.h6">
+                <MudIcon Icon="@Icons.Material.Filled.HowToReg" Class="me-2" />
+                Pending User Approvals
+            </MudText>
+            <MudButton Variant="Variant.Outlined"
+                      Color="Color.Primary"
+                      StartIcon="@Icons.Material.Filled.Refresh"
+                      OnClick="LoadPendingUsers"
+                      Disabled="@_isLoading">
+                Refresh
+            </MudButton>
+        </div>
+
+        <MudAlert Severity="Severity.Info" Dense="true">
+            Users who register with an invitation will appear here for approval.
+            Users not approved within 7 days will be automatically rejected.
+        </MudAlert>
+
+        @if (_isLoading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (!_pendingUsers.Any())
+        {
+            <MudAlert Severity="Severity.Info">
+                No pending user approvals at this time.
+            </MudAlert>
+        }
+        else
+        {
+            <MudTable Items="@_pendingUsers" Hover="true" Dense="true">
+                <HeaderContent>
+                    <MudTh>Username</MudTh>
+                    <MudTh>Registered</MudTh>
+                    <MudTh>Invitation Code</MudTh>
+                    <MudTh>Auto-Reject</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Username">
+                        <MudText Typo="Typo.body2">@context.Username</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Registered">
+                        <MudText Typo="Typo.body2">
+                            @context.RequestedAt.ToString("yyyy-MM-dd HH:mm")
+                        </MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Invitation Code">
+                        @if (!string.IsNullOrEmpty(context.InvitationCode))
+                        {
+                            <MudText Typo="Typo.body2" Style="font-family: monospace; font-size: 0.85em;">
+                                @MaskCode(context.InvitationCode)
+                            </MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">-</MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Auto-Reject">
+                        @if (context.ShowAutoRejectionWarning)
+                        {
+                            <MudChip T="string" Color="Color.Error" Size="Size.Small">
+                                @context.DaysUntilAutoRejection days
+                            </MudChip>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2">
+                                @context.DaysUntilAutoRejection days
+                            </MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Actions">
+                        <MudStack Row="true" Spacing="1">
+                            <MudIconButton Icon="@Icons.Material.Filled.CheckCircle"
+                                          Color="Color.Success"
+                                          Size="Size.Small"
+                                          Title="Approve user"
+                                          OnClick="@(() => ApproveUser(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Cancel"
+                                          Color="Color.Error"
+                                          Size="Size.Small"
+                                          Title="Reject user"
+                                          OnClick="@(() => RejectUser(context))" />
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    private List<PendingUserDto> _pendingUsers = new();
+    private bool _isLoading = true;
+    private string? _currentTenantId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get current tenant ID
+        _currentTenantId = TenantContext.CurrentTenant?.Id;
+
+        if (string.IsNullOrEmpty(_currentTenantId))
+        {
+            try
+            {
+                var tenants = await TenantContext.GetTenantsAsync();
+                _currentTenantId = tenants.FirstOrDefault()?.Id;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to fetch tenants");
+            }
+        }
+
+        // Fall back to getting TenantId from user claims
+        if (string.IsNullOrEmpty(_currentTenantId))
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            _currentTenantId = authState.User.FindFirst(HnHMapperServer.Core.Constants.AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+
+            Logger.LogInformation("Got tenant ID from claims: {TenantId}", _currentTenantId);
+        }
+
+        if (string.IsNullOrEmpty(_currentTenantId))
+        {
+            Snackbar.Add("Unable to determine your tenant. Please contact support.", Severity.Error);
+            Logger.LogError("Unable to determine tenant ID for user");
+            return;
+        }
+
+        await LoadPendingUsers();
+    }
+
+    private async Task LoadPendingUsers()
+    {
+        if (string.IsNullOrEmpty(_currentTenantId))
+        {
+            Logger.LogWarning("LoadPendingUsers: No tenant ID available");
+            return;
+        }
+
+        Logger.LogInformation("LoadPendingUsers: Loading pending users for tenant {TenantId}", _currentTenantId);
+        _isLoading = true;
+        try
+        {
+            _pendingUsers = await TenantService.GetPendingUsersAsync(_currentTenantId);
+            Logger.LogInformation("LoadPendingUsers: Loaded {Count} pending users", _pendingUsers.Count);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load pending users");
+            Snackbar.Add("Failed to load pending users. Please try again.", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task ApproveUser(PendingUserDto user)
+    {
+        var parameters = new DialogParameters<ApproveUserDialog>
+        {
+            { x => x.User, user }
+        };
+
+        var dialog = await DialogService.ShowAsync<ApproveUserDialog>(
+            "Approve User",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is List<string> permissions)
+        {
+            try
+            {
+                var success = await TenantService.ApproveUserAsync(_currentTenantId!, user.UserId, permissions);
+
+                if (success)
+                {
+                    Snackbar.Add($"User {user.Username} approved successfully!", Severity.Success);
+                    await LoadPendingUsers();
+                }
+                else
+                {
+                    Snackbar.Add("Failed to approve user. Please try again.", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error approving user {UserId}", user.UserId);
+                Snackbar.Add("Failed to approve user. Please try again.", Severity.Error);
+            }
+        }
+    }
+
+    private async Task RejectUser(PendingUserDto user)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Reject User",
+            $"Are you sure you want to reject {user.Username}? This will delete their account and cannot be undone.",
+            yesText: "Reject",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                var success = await TenantService.RejectUserAsync(_currentTenantId!, user.UserId);
+
+                if (success)
+                {
+                    Snackbar.Add($"User {user.Username} rejected.", Severity.Success);
+                    await LoadPendingUsers();
+                }
+                else
+                {
+                    Snackbar.Add("Failed to reject user. Please try again.", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error rejecting user {UserId}", user.UserId);
+                Snackbar.Add("Failed to reject user. Please try again.", Severity.Error);
+            }
+        }
+    }
+
+    private string MaskCode(string code)
+    {
+        if (code.Length <= 8)
+            return code;
+
+        // Show first 4 and last 4 characters
+        return $"{code.Substring(0, 4)}...{code.Substring(code.Length - 4)}";
+    }
+}

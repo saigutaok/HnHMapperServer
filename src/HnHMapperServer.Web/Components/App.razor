@@ -1,0 +1,28 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="icon" type="image/gif" href="/favicon.png" />
+    <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="lib/leaflet/1.9.4/leaflet.css" />
+    <link rel="stylesheet" href="css/map-styles.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="HnHMapperServer.Web.styles.css" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <script src="js/blazor-diagnostics.js"></script>
+    <script src="_framework/blazor.web.js"></script>
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script src="lib/leaflet/1.9.4/leaflet.js"></script>
+    <script src="lib/leaflet-plugins/rotatedmarker/0.2.0/leaflet.rotatedMarker.min.js"></script>
+    <script src="lib/leaflet-plugins/marker-slideto/latest/L.Marker.SlideTo.js"></script>
+</body>
+
+</html>

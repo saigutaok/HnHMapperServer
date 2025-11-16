@@ -1,0 +1,152 @@
+﻿@inherits LayoutComponentBase
+@using HnHMapperServer.Services.Interfaces
+@using HnHMapperServer.Web.Services
+@using HnHMapperServer.Web.Components.Shared
+@using MudBlazor.Utilities
+@inject IBuildInfoProvider BuildInfoProvider
+@inject VersionClient VersionClient
+
+<MudThemeProvider Theme="_customTheme" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider
+    PositionClass="Defaults.Classes.Position.BottomLeft"
+    MaxDisplayedSnackbars="5"
+    PreventDuplicates="true"
+    VisibleStateDuration="400"
+    HideTransitionDuration="400" />
+
+<MudLayout>
+    <MudAppBar Elevation="0" Class="glass-appbar">
+        <MudText Typo="Typo.h6" Class="ml-3">HnH Mapper</MudText>
+        <MudSpacer />
+
+        <AuthorizeView>
+            <Authorized>
+                <!-- Tenant Selector (only show if user has multiple tenants) -->
+                <TenantSelectorDropdown />
+
+                <MudButton StartIcon="@Icons.Material.Filled.Home"
+                           Color="Color.Inherit"
+                           Href="/">
+                    <span class="d-none d-md-inline">Dashboard</span>
+                </MudButton>
+
+                <MudButton StartIcon="@Icons.Material.Filled.Map"
+                           Color="Color.Inherit"
+                           Href="/map">
+                    <span class="d-none d-md-inline">Map</span>
+                </MudButton>
+
+                <AuthorizeView Roles="SuperAdmin" Context="superAdminAuth">
+                    <Authorized>
+                        <MudButton StartIcon="@Icons.Material.Filled.SupervisorAccount"
+                                   Color="Color.Inherit"
+                                   Href="/superadmin">
+                            <span class="d-none d-md-inline">Admin Panel</span>
+                        </MudButton>
+                    </Authorized>
+                </AuthorizeView>
+
+                <AuthorizeView Roles="TenantAdmin" Context="tenantAdminAuth">
+                    <Authorized>
+                        <MudButton StartIcon="@Icons.Material.Filled.AdminPanelSettings"
+                                   Color="Color.Inherit"
+                                   Href="/admin">
+                            <span class="d-none d-md-inline">Organization</span>
+                        </MudButton>
+                    </Authorized>
+                </AuthorizeView>
+
+                <MudMenu Icon="@Icons.Material.Filled.AccountCircle"
+                         Color="Color.Inherit"
+                         Dense="true"
+                         AriaLabel="User account menu">
+                    <MudMenuItem Href="/password" Icon="@Icons.Material.Filled.Lock">Change Password</MudMenuItem>
+                    <MudMenuItem Href="/api/logout" Icon="@Icons.Material.Filled.Logout">Logout</MudMenuItem>
+                </MudMenu>
+            </Authorized>
+            <NotAuthorized>
+                <MudButton Href="/login" Variant="Variant.Text" Color="Color.Inherit">Login</MudButton>
+            </NotAuthorized>
+        </AuthorizeView>
+    </MudAppBar>
+
+    <MudMainContent>
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+<!-- Version Footer -->
+<div style="position: fixed; bottom: 8px; left: 8px; z-index: 1000; font-size: 11px; color: rgba(0,0,0,0.4); background: rgba(255,255,255,0.8); padding: 4px 8px; border-radius: 4px; font-family: monospace;">
+    @if (!string.IsNullOrEmpty(_versionText))
+    {
+        @_versionText
+    }
+    else
+    {
+        <text>Loading version...</text>
+    }
+</div>
+
+<div id="blazor-error-ui">
+    <strong style="color: #000;">Blazor Circuit Error</strong>
+    <span id="blazor-error-message" style="color: #000; display: block; margin: 8px 0;">
+        An unhandled error has occurred.
+    </span>
+    <div id="blazor-error-details" style="color: #333; font-family: monospace; font-size: 11px; max-height: 80px; overflow-y: auto; white-space: pre-wrap; margin: 8px 0; padding: 8px; background: rgba(0,0,0,0.05); border-radius: 4px; display: none;">
+    </div>
+    <span id="blazor-error-time" style="color: #666; font-size: 11px; display: block; margin-bottom: 8px;">
+    </span>
+    <a href="" class="reload">Reload</a>
+    <a class="dismiss">✕</a>
+</div>
+
+@code {
+    private string _versionText = string.Empty;
+
+    // Custom glassmorphism-friendly theme with neutral colors
+    private MudTheme _customTheme = new()
+    {
+        PaletteLight = new PaletteLight()
+        {
+            Primary = new MudColor("#64B5F6"), // Soft blue - works well with glass
+            Secondary = new MudColor("#81C784"), // Soft green
+            Tertiary = new MudColor("#FFB74D"), // Soft amber
+            AppbarText = new MudColor("#424242"), // Dark gray text for contrast
+            DrawerBackground = new MudColor("#FFFFFF"),
+            Surface = new MudColor("#FFFFFF"),
+            Background = new MudColor("#F5F5F5"),
+            TextPrimary = new MudColor("#424242"),
+            TextSecondary = new MudColor("#616161")
+        },
+        LayoutProperties = new LayoutProperties()
+        {
+            DefaultBorderRadius = "8px" // Rounded corners for modern look
+        }
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get Web version from the provider
+        var webVersion = BuildInfoProvider.Get("web");
+        
+        // Try to get API version from the API service
+        var apiVersion = await VersionClient.GetApiVersionAsync();
+        
+        // Format version text: "Web {version} {datetime} | API {version} {datetime}"
+        var webVer = webVersion.GetShortVersion();
+        var webBuild = webVersion.BuildTimeUtc;
+        
+        if (apiVersion != null)
+        {
+            var apiVer = apiVersion.GetShortVersion();
+            var apiBuild = apiVersion.BuildTimeUtc;
+            _versionText = $"Web {webVer} {webBuild} | API {apiVer} {apiBuild}";
+        }
+        else
+        {
+            _versionText = $"Web {webVer} {webBuild} | API n/a";
+        }
+    }
+}

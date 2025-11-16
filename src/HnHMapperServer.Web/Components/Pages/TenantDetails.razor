@@ -1,0 +1,498 @@
+@page "/superadmin/tenant/{TenantId}"
+@rendermode InteractiveServer
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "SuperAdmin")]
+@using HnHMapperServer.Core.DTOs
+@using HnHMapperServer.Web.Components.SuperAdmin
+@using HnHMapperServer.Web.Components.Admin
+@using TenantUserDto = HnHMapperServer.Core.DTOs.TenantUserDto
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager NavigationManager
+@inject ILogger<TenantDetails> Logger
+
+<MudBreadcrumbs Items="_breadcrumbItems" Class="mb-4"></MudBreadcrumbs>
+
+@if (_isLoading)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else if (_tenant == null)
+{
+    <MudAlert Severity="Severity.Error">Tenant not found</MudAlert>
+}
+else
+{
+    @* Header with Quick Actions *@
+    <MudPaper Class="pa-4 mb-4">
+        <div class="d-flex justify-space-between align-center mb-3">
+            <div>
+                <MudText Typo="Typo.h4">@_tenant.Name</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    <code>@_tenant.Id</code>
+                </MudText>
+            </div>
+            <MudStack Row="true" Spacing="2">
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Edit"
+                           OnClick="EditTenant">
+                    Edit
+                </MudButton>
+                @if (_tenant.IsActive)
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Warning"
+                               StartIcon="@Icons.Material.Filled.Block"
+                               OnClick="SuspendTenant">
+                        Suspend
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Success"
+                               StartIcon="@Icons.Material.Filled.CheckCircle"
+                               OnClick="ActivateTenant">
+                        Activate
+                    </MudButton>
+                }
+            </MudStack>
+        </div>
+
+        @* Overview Cards *@
+        <MudGrid>
+            <MudItem xs="12" md="3">
+                <MudCard>
+                    <MudCardContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Status</MudText>
+                        <MudChip T="string"
+                                 Size="Size.Medium"
+                                 Color="@(_tenant.IsActive ? Color.Success : Color.Error)">
+                            @(_tenant.IsActive ? "Active" : "Suspended")
+                        </MudChip>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudCard>
+                    <MudCardContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Users</MudText>
+                        <MudText Typo="Typo.h5">@_tenant.UserCount</MudText>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudCard>
+                    <MudCardContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Tokens</MudText>
+                        <MudText Typo="Typo.h5">@_tenant.TokenCount</MudText>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+            <MudItem xs="12" md="3">
+                <MudCard>
+                    <MudCardContent>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Created</MudText>
+                        <MudText Typo="Typo.body1">@_tenant.CreatedAt.ToString("yyyy-MM-dd")</MudText>
+                    </MudCardContent>
+                </MudCard>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    @* Storage Usage *@
+    <MudPaper Class="pa-4 mb-4">
+        <MudText Typo="Typo.h6" Class="mb-3">
+            <MudIcon Icon="@Icons.Material.Filled.Storage" Class="me-2" />
+            Storage Usage
+        </MudText>
+        <MudText Typo="Typo.body2" Class="mb-2">
+            <strong>Current Usage:</strong> @FormatStorageSize(_tenant.CurrentStorageMB) /
+            @FormatStorageSize(_tenant.StorageQuotaMB)
+        </MudText>
+        @{
+            var usagePercent = _tenant.StorageUsagePercent;
+            var color = usagePercent >= 90 ? Color.Error : (usagePercent >= 75 ? Color.Warning : Color.Success);
+        }
+        <MudProgressLinear Value="@usagePercent"
+                           Color="@color"
+                           Size="Size.Large"
+                           Class="mb-2">
+            <MudText Typo="Typo.body2">@usagePercent.ToString("F1")%</MudText>
+        </MudProgressLinear>
+        @if (usagePercent >= 90)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true">
+                Tenant is approaching storage quota limit.
+            </MudAlert>
+        }
+    </MudPaper>
+
+    @* Users Table *@
+    <MudPaper Class="pa-4 mb-4">
+        <MudText Typo="Typo.h6" Class="mb-3">
+            <MudIcon Icon="@Icons.Material.Filled.People" Class="me-2" />
+            Users (@_tenant.UserCount)
+        </MudText>
+        @if (_tenant.Users.Any())
+        {
+            <MudTable T="TenantUserDto" Items="@_tenant.Users" Dense="true" Hover="true">
+                <HeaderContent>
+                    <MudTh>Username</MudTh>
+                    <MudTh>Role</MudTh>
+                    <MudTh>Permissions</MudTh>
+                    <MudTh>Joined</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Username">@context.Username</MudTd>
+                    <MudTd DataLabel="Role">
+                        <MudChip T="string" Size="Size.Small" Color="@GetRoleColor(context.Role)">
+                            @context.Role
+                        </MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="Permissions">
+                        <MudStack Row="true" Spacing="1">
+                            @foreach (var permission in context.Permissions)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default">@permission</MudChip>
+                            }
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Joined">@context.JoinedAt.ToString("yyyy-MM-dd")</MudTd>
+                    <MudTd DataLabel="Status">
+                        @if (context.PendingApproval)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">Pending</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">Active</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Actions">
+                        <MudStack Row="true" Spacing="1">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                          Size="Size.Small"
+                                          Color="Color.Primary"
+                                          Title="Edit Permissions"
+                                          OnClick="@(() => EditUserPermissions(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.SwapHoriz"
+                                          Size="Size.Small"
+                                          Color="Color.Info"
+                                          Title="Change Role"
+                                          OnClick="@(() => ChangeUserRole(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Lock"
+                                          Size="Size.Small"
+                                          Color="Color.Warning"
+                                          Title="Reset Password"
+                                          OnClick="@(() => ResetUserPassword(context))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.PersonRemove"
+                                          Size="Size.Small"
+                                          Color="Color.Error"
+                                          Title="Remove User"
+                                          OnClick="@(() => RemoveUser(context))" />
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Info">No users found in this tenant.</MudAlert>
+        }
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public string TenantId { get; set; } = string.Empty;
+
+    private TenantDetailsDto? _tenant;
+    private bool _isLoading = true;
+
+    private List<BreadcrumbItem> _breadcrumbItems = new()
+    {
+        new BreadcrumbItem("SuperAdmin", href: "/superadmin"),
+        new BreadcrumbItem("Tenants", href: "/superadmin", disabled: false),
+        new BreadcrumbItem("Details", href: null, disabled: true)
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadTenant();
+    }
+
+    private async Task LoadTenant()
+    {
+        _isLoading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync($"/api/superadmin/tenants/{TenantId}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                _tenant = await response.Content.ReadFromJsonAsync<TenantDetailsDto>();
+                Logger.LogInformation("Loaded tenant details for {TenantId}", TenantId);
+
+                // Update breadcrumb
+                if (_tenant != null)
+                {
+                    _breadcrumbItems[2] = new BreadcrumbItem(_tenant.Name, href: null, disabled: true);
+                }
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to load tenant details: {StatusCode}, Body={Body}",
+                    response.StatusCode, errorBody);
+                Snackbar.Add("Failed to load tenant details", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading tenant details for {TenantId}", TenantId);
+            Snackbar.Add($"Error loading tenant: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task EditTenant()
+    {
+        if (_tenant == null) return;
+
+        var tenantListDto = new TenantListDto
+        {
+            Id = _tenant.Id,
+            Name = _tenant.Name,
+            StorageQuotaMB = _tenant.StorageQuotaMB,
+            CurrentStorageMB = _tenant.CurrentStorageMB,
+            CreatedAt = _tenant.CreatedAt,
+            IsActive = _tenant.IsActive,
+            UserCount = _tenant.UserCount,
+            TokenCount = _tenant.TokenCount
+        };
+
+        var parameters = new DialogParameters<EditTenantDialog>
+        {
+            { x => x.Tenant, tenantListDto }
+        };
+
+        var dialog = await DialogService.ShowAsync<EditTenantDialog>(
+            "Edit Tenant",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            await LoadTenant();
+        }
+    }
+
+    private async Task SuspendTenant()
+    {
+        if (_tenant == null) return;
+
+        var result = await DialogService.ShowMessageBox(
+            "Suspend Tenant",
+            $"Are you sure you want to suspend '{_tenant.Name}'? This will prevent all users in this tenant from accessing the system until it is reactivated.",
+            yesText: "Suspend",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                var httpClient = HttpClientFactory.CreateClient("API");
+                var response = await httpClient.PostAsync($"/api/superadmin/tenants/{TenantId}/suspend", null);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    Snackbar.Add($"Tenant '{_tenant.Name}' suspended successfully", Severity.Success);
+                    await LoadTenant();
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    Logger.LogWarning("Failed to suspend tenant: {StatusCode}, Body={Body}",
+                        response.StatusCode, errorBody);
+                    Snackbar.Add($"Failed to suspend tenant: {response.StatusCode}", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error suspending tenant {TenantId}", TenantId);
+                Snackbar.Add($"Error suspending tenant: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private async Task ActivateTenant()
+    {
+        if (_tenant == null) return;
+
+        var result = await DialogService.ShowMessageBox(
+            "Activate Tenant",
+            $"Are you sure you want to activate '{_tenant.Name}'? This will restore access for all users in this tenant.",
+            yesText: "Activate",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                var httpClient = HttpClientFactory.CreateClient("API");
+                var response = await httpClient.PostAsync($"/api/superadmin/tenants/{TenantId}/activate", null);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    Snackbar.Add($"Tenant '{_tenant.Name}' activated successfully", Severity.Success);
+                    await LoadTenant();
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    Logger.LogWarning("Failed to activate tenant: {StatusCode}, Body={Body}",
+                        response.StatusCode, errorBody);
+                    Snackbar.Add($"Failed to activate tenant: {response.StatusCode}", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error activating tenant {TenantId}", TenantId);
+                Snackbar.Add($"Error activating tenant: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+
+    private Color GetRoleColor(string role)
+    {
+        return role switch
+        {
+            "TenantAdmin" => Color.Error,
+            "TenantUser" => Color.Primary,
+            _ => Color.Default
+        };
+    }
+
+    private string FormatStorageSize(double mb)
+    {
+        if (mb >= 1024)
+        {
+            return $"{(mb / 1024):F2} GB";
+        }
+        return $"{mb:F0} MB";
+    }
+
+    // User management actions
+
+    private async Task EditUserPermissions(TenantUserDto user)
+    {
+        var parameters = new DialogParameters<EditUserPermissionsDialog>
+        {
+            { x => x.User, user },
+            { x => x.IsSuperAdmin, true },
+            { x => x.SuperAdminTenantId, TenantId }
+        };
+
+        var dialog = await DialogService.ShowAsync<EditUserPermissionsDialog>(
+            "Edit User Permissions",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            // Reload tenant to reflect permission changes
+            await LoadTenant();
+        }
+    }
+
+    private async Task ChangeUserRole(TenantUserDto user)
+    {
+        var parameters = new DialogParameters<ChangeUserRoleDialog>
+        {
+            { x => x.User, user },
+            { x => x.TenantId, TenantId }
+        };
+
+        var dialog = await DialogService.ShowAsync<ChangeUserRoleDialog>(
+            "Change User Role",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            // Reload tenant to reflect role changes
+            await LoadTenant();
+        }
+    }
+
+    private async Task ResetUserPassword(TenantUserDto user)
+    {
+        var parameters = new DialogParameters<ChangeUserPasswordDialog>
+        {
+            { x => x.Username, user.Username },
+            { x => x.UserId, user.UserId },
+            { x => x.IsSuperAdmin, true },
+            { x => x.SuperAdminTenantId, TenantId }
+        };
+
+        var dialog = await DialogService.ShowAsync<ChangeUserPasswordDialog>(
+            "Reset User Password",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        // No need to reload tenant after password change
+        // Just close the dialog, callback will show success message
+    }
+
+    private async Task RemoveUser(TenantUserDto user)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Remove User from Tenant",
+            $"Are you sure you want to remove '{user.Username}' from tenant '{_tenant?.Name}'? " +
+            $"This will revoke all access and permissions for this user.",
+            yesText: "Remove",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                var httpClient = HttpClientFactory.CreateClient("API");
+                var response = await httpClient.DeleteAsync(
+                    $"/api/superadmin/tenants/{TenantId}/users/{user.UserId}");
+
+                if (response.IsSuccessStatusCode)
+                {
+                    Snackbar.Add($"User '{user.Username}' removed from tenant successfully", Severity.Success);
+                    await LoadTenant(); // Reload to update user list
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    Logger.LogWarning("Failed to remove user: {StatusCode}, Body={Body}",
+                        response.StatusCode, errorBody);
+                    Snackbar.Add($"Failed to remove user: {response.StatusCode}", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error removing user {UserId} from tenant {TenantId}",
+                    user.UserId, TenantId);
+                Snackbar.Add($"Error removing user: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

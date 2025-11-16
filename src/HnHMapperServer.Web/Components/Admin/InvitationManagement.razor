@@ -1,0 +1,267 @@
+@using HnHMapperServer.Web.Services
+@using HnHMapperServer.Core.DTOs
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IInvitationService InvitationService
+@inject TenantContextService TenantContext
+@inject NavigationManager NavigationManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject IJSRuntime JSRuntime
+@inject ILogger<InvitationManagement> Logger
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="3">
+        <div class="d-flex justify-space-between align-center">
+            <MudText Typo="Typo.h6">
+                <MudIcon Icon="@Icons.Material.Filled.Mail" Class="me-2" />
+                Invitation Management
+            </MudText>
+            <MudButton Variant="Variant.Filled"
+                      Color="Color.Primary"
+                      StartIcon="@Icons.Material.Filled.Add"
+                      OnClick="CreateInvitation"
+                      Disabled="@_isCreating">
+                @if (_isCreating)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                    <span>Creating...</span>
+                }
+                else
+                {
+                    <span>Create Invitation</span>
+                }
+            </MudButton>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_newInviteCode))
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Filled" Class="mb-4">
+                <MudText Typo="Typo.body1" Class="mb-2">
+                    <strong>Invitation Created!</strong>
+                </MudText>
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    Share this link with the person you want to invite. It will expire in 7 days.
+                </MudText>
+                <MudPaper Class="pa-2 d-flex justify-space-between align-center">
+                    <MudText Typo="Typo.body2" Style="font-family: monospace; word-break: break-all;">
+                        @_newInviteLink
+                    </MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                  Color="Color.Default"
+                                  OnClick="@(() => CopyToClipboard(_newInviteLink))"
+                                  Title="Copy to clipboard" />
+                </MudPaper>
+                <MudButton OnClick="@(() => _newInviteCode = null)" Class="mt-2" Size="Size.Small">
+                    Dismiss
+                </MudButton>
+            </MudAlert>
+        }
+
+        <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4">
+            <MudTabPanel Text="Active" Icon="@Icons.Material.Filled.CheckCircle" BadgeData="@_activeCount.ToString()">
+                <InvitationTable Invitations="@_activeInvitations"
+                                Status="Active"
+                                OnCopyLink="@CopyInviteLink"
+                                OnRevoke="@RevokeInvitation"
+                                ShowCopy="true"
+                                ShowRevoke="true"
+                                IsLoading="@_isLoading" />
+            </MudTabPanel>
+
+            <MudTabPanel Text="Used" Icon="@Icons.Material.Filled.Done" BadgeData="@_usedCount.ToString()">
+                <InvitationTable Invitations="@_usedInvitations"
+                                Status="Used"
+                                OnCopyLink="@CopyInviteLink"
+                                ShowCopy="true"
+                                ShowRevoke="false"
+                                IsLoading="@_isLoading" />
+            </MudTabPanel>
+
+            <MudTabPanel Text="Expired" Icon="@Icons.Material.Filled.Schedule" BadgeData="@_expiredCount.ToString()">
+                <InvitationTable Invitations="@_expiredInvitations"
+                                Status="Expired"
+                                ShowCopy="false"
+                                ShowRevoke="false"
+                                IsLoading="@_isLoading" />
+            </MudTabPanel>
+
+            <MudTabPanel Text="Revoked" Icon="@Icons.Material.Filled.Block" BadgeData="@_revokedCount.ToString()">
+                <InvitationTable Invitations="@_revokedInvitations"
+                                Status="Revoked"
+                                ShowCopy="false"
+                                ShowRevoke="false"
+                                IsLoading="@_isLoading" />
+            </MudTabPanel>
+        </MudTabs>
+    </MudStack>
+</MudPaper>
+
+@code {
+    private List<HnHMapperServer.Core.DTOs.InvitationDto> _invitations = new();
+    private List<HnHMapperServer.Core.DTOs.InvitationDto> _activeInvitations = new();
+    private List<HnHMapperServer.Core.DTOs.InvitationDto> _usedInvitations = new();
+    private List<HnHMapperServer.Core.DTOs.InvitationDto> _expiredInvitations = new();
+    private List<HnHMapperServer.Core.DTOs.InvitationDto> _revokedInvitations = new();
+
+    private int _activeCount => _activeInvitations.Count;
+    private int _usedCount => _usedInvitations.Count;
+    private int _expiredCount => _expiredInvitations.Count;
+    private int _revokedCount => _revokedInvitations.Count;
+
+    private bool _isLoading = true;
+    private bool _isCreating = false;
+    private string? _newInviteCode;
+    private string? _newInviteLink;
+    private string? _currentTenantId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Get current tenant ID from context, or use default tenant
+        // This supports both multi-tenant and single-tenant deployments
+        _currentTenantId = TenantContext.CurrentTenant?.Id;
+
+        if (string.IsNullOrEmpty(_currentTenantId))
+        {
+            // Try fetching tenants from API
+            try
+            {
+                var tenants = await TenantContext.GetTenantsAsync();
+                _currentTenantId = tenants.FirstOrDefault()?.Id;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to fetch tenants, using default tenant");
+            }
+        }
+
+        // Fall back to getting TenantId from user claims
+        if (string.IsNullOrEmpty(_currentTenantId))
+        {
+            var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            _currentTenantId = authState.User.FindFirst(HnHMapperServer.Core.Constants.AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+
+            Logger.LogInformation("Got tenant ID from claims: {TenantId}", _currentTenantId);
+        }
+
+        if (string.IsNullOrEmpty(_currentTenantId))
+        {
+            Snackbar.Add("Unable to determine your tenant. Please contact support.", Severity.Error);
+            Logger.LogError("Unable to determine tenant ID for user");
+            return;
+        }
+
+        await LoadInvitations();
+    }
+
+    private async Task LoadInvitations()
+    {
+        if (string.IsNullOrEmpty(_currentTenantId))
+            return;
+
+        _isLoading = true;
+        try
+        {
+            _invitations = await InvitationService.GetInvitationsAsync(_currentTenantId);
+
+            // Group by status
+            var now = DateTime.UtcNow;
+            _activeInvitations = _invitations.Where(i => i.Status == "Active" && i.ExpiresAt > now).ToList();
+            _usedInvitations = _invitations.Where(i => i.Status == "Used").ToList();
+            _expiredInvitations = _invitations.Where(i => i.ExpiresAt <= now && i.Status != "Revoked").ToList();
+            _revokedInvitations = _invitations.Where(i => i.Status == "Revoked").ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load invitations");
+            Snackbar.Add("Failed to load invitations. Please try again.", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task CreateInvitation()
+    {
+        if (string.IsNullOrEmpty(_currentTenantId))
+            return;
+
+        _isCreating = true;
+        try
+        {
+            var invitation = await InvitationService.CreateInvitationAsync(_currentTenantId);
+            if (invitation != null)
+            {
+                _newInviteCode = invitation.InviteCode;
+                _newInviteLink = $"{NavigationManager.BaseUri}register?invite={invitation.InviteCode}";
+                Snackbar.Add("Invitation created successfully!", Severity.Success);
+                await LoadInvitations();
+            }
+            else
+            {
+                Snackbar.Add("Failed to create invitation.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create invitation");
+            Snackbar.Add("Failed to create invitation. Please try again.", Severity.Error);
+        }
+        finally
+        {
+            _isCreating = false;
+        }
+    }
+
+    private async Task CopyInviteLink(HnHMapperServer.Core.DTOs.InvitationDto invitation)
+    {
+        var inviteLink = $"{NavigationManager.BaseUri}register?invite={invitation.InviteCode}";
+        await CopyToClipboard(inviteLink);
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            Snackbar.Add("Link copied to clipboard!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to copy to clipboard");
+            Snackbar.Add("Failed to copy to clipboard.", Severity.Error);
+        }
+    }
+
+    private async Task RevokeInvitation(HnHMapperServer.Core.DTOs.InvitationDto invitation)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Revoke Invitation",
+            $"Are you sure you want to revoke this invitation? This action cannot be undone.",
+            yesText: "Revoke",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            try
+            {
+                var success = await InvitationService.RevokeInvitationAsync(invitation.Id);
+                if (success)
+                {
+                    Snackbar.Add("Invitation revoked successfully.", Severity.Success);
+                    await LoadInvitations();
+                }
+                else
+                {
+                    Snackbar.Add("Failed to revoke invitation.", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to revoke invitation");
+                Snackbar.Add("Failed to revoke invitation. Please try again.", Severity.Error);
+            }
+        }
+    }
+}

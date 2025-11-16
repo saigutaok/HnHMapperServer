@@ -1,0 +1,2041 @@
+using HnHMapperServer.Web.Models;
+using HnHMapperServer.Web.Services;
+using HnHMapperServer.Web.Services.Map;
+using HnHMapperServer.Web.Components.Map;
+using HnHMapperServer.Web.Components.Map.Sidebar;
+using HnHMapperServer.Web.Components.Map.Dialogs;
+using HnHMapperServer.Core.Enums;
+using HnHMapperServer.Core.Extensions;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.JSInterop;
+using MudBlazor;
+using MudBlazor.Services;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Linq;
+
+namespace HnHMapperServer.Web.Components.Pages;
+
+/// <summary>
+/// Main map viewer page component - coordinates map UI components and services.
+/// Refactored to use specialized services for better maintainability.
+/// </summary>
+[Authorize]
+public partial class Map : IAsyncDisposable, IBrowserViewportObserver
+{
+    /// <summary>
+    /// Shared JSON options matching API defaults (camelCase, case-insensitive)
+    /// </summary>
+    private static readonly JsonSerializerOptions CamelCaseJsonOptions = new(JsonSerializerDefaults.Web);
+
+    #region Query String Parameters (parsed from URL for bookmarks)
+
+    private int? MapId { get; set; }
+    private int? GridX { get; set; }
+    private int? GridY { get; set; }
+    private int? Zoom { get; set; }
+    private int? CharacterId { get; set; }
+
+    #endregion
+
+    #region Injected Services
+
+    [Inject] private MapDataService MapData { get; set; } = default!;
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+    [Inject] private ILogger<Map> Logger { get; set; } = default!;
+    [Inject] private IHttpClientFactory HttpClientFactory { get; set; } = default!;
+    [Inject] private AuthenticationStateCache AuthStateCache { get; set; } = default!;
+    [Inject] private ISnackbar Snackbar { get; set; } = default!;
+    [Inject] private ReconnectionState ReconnectionState { get; set; } = default!;
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+    [Inject] private IDialogService DialogService { get; set; } = default!;
+    [Inject] private IBrowserViewportService BrowserViewportService { get; set; } = default!;
+
+    // New specialized services
+    [Inject] private CharacterTrackingService CharacterTracking { get; set; } = default!;
+    [Inject] private MarkerStateService MarkerState { get; set; } = default!;
+    [Inject] private CustomMarkerStateService CustomMarkerState { get; set; } = default!;
+    [Inject] private MapNavigationService MapNavigation { get; set; } = default!;
+    [Inject] private LayerVisibilityService LayerVisibility { get; set; } = default!;
+
+    #endregion
+
+    #region Component References
+
+    private MapView? mapView;
+
+    #endregion
+
+    #region Component State (Reduced!)
+
+    private MapState state = new();
+    private bool isLoaded = false;
+    private bool hasMapPermission = false;
+    private bool hasMarkersPermission = false;
+    private bool isReconnecting = false;
+    private bool circuitFullyReady = false;  // Prevents JS->NET calls during circuit initialization
+
+    private Timer? markerUpdateTimer;
+    private Timer? permissionCheckTimer;
+    private int markerUpdateRetryCount = 0;
+    private const int MaxMarkerUpdateRetries = 3;
+
+    private IJSObjectReference? sseModule;
+    private DotNetObjectReference<Map>? sseDotnetRef;
+    private bool sseInitialized;
+    private IJSObjectReference? leafletModule; // Cached leaflet-interop module for ping operations
+
+    // Locks to prevent race conditions during initialization
+    private readonly SemaphoreSlim sseCallbackLock = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim customMarkerLock = new SemaphoreSlim(1, 1);
+
+    #endregion
+
+    #region Sidebar State
+
+    private bool isSidebarOpen = false;
+    private SidebarMode sidebarMode = SidebarMode.Players;
+    private bool hasActivePing = false;
+
+    #endregion
+
+    #region Context Menu State
+
+    private bool showContextMenu = false;
+    private bool showMarkerContextMenu = false;
+    private bool showMapActionMenu = false; // New: for Create Marker/Ping menu
+    private int contextMenuX = 0;
+    private int contextMenuY = 0;
+    private (int x, int y) contextCoords;
+    private int contextMarkerId = 0;
+
+    // Map action menu context (for marker/ping creation)
+    private int mapActionMapId = 0;
+    private int mapActionCoordX = 0;
+    private int mapActionCoordY = 0;
+    private int mapActionX = 0;
+    private int mapActionY = 0;
+
+    #endregion
+
+    #region Computed Properties (Delegated to Services)
+
+    // Player/Character state (for razor view)
+    private IEnumerable<CharacterModel> FilteredPlayers => CharacterTracking.FilteredPlayers;
+    private IReadOnlyList<CharacterModel> allCharacters => CharacterTracking.AllCharacters;
+    private bool isFollowing => CharacterTracking.IsFollowing;
+    private int? followingCharacterId => CharacterTracking.FollowingCharacterId;
+
+    private string PlayerFilter
+    {
+        get => CharacterTracking.PlayerFilter;
+        set => CharacterTracking.PlayerFilter = value;
+    }
+
+    // Marker state (for razor view)
+    private IEnumerable<MarkerModel> FilteredMarkers => MarkerState.FilteredMarkers;
+    private IReadOnlyList<MarkerModel> allMarkers => MarkerState.AllMarkers;
+
+    private string MarkerFilter
+    {
+        get => MarkerState.MarkerFilter;
+        set => MarkerState.MarkerFilter = value;
+    }
+
+    // Custom marker state (for razor view)
+    private IReadOnlyList<CustomMarkerViewModel> allCustomMarkers => CustomMarkerState.AllCustomMarkers;
+
+    // Map navigation state (for razor view)
+    private IReadOnlyList<MapInfoModel> maps => MapNavigation.Maps;
+
+    private MapInfoModel? selectedMap
+    {
+        get => MapNavigation.SelectedMap;
+        set => MapNavigation.SelectedMap = value;
+    }
+
+    private MapInfoModel? overlayMap
+    {
+        get => MapNavigation.OverlayMap;
+        set => MapNavigation.OverlayMap = value;
+    }
+
+    // Legacy computed properties (PascalCase for backward compatibility)
+    private bool IsFollowing => CharacterTracking.IsFollowing;
+    private int? FollowingCharacterId => CharacterTracking.FollowingCharacterId;
+
+    private MapInfoModel? SelectedMap
+    {
+        get => MapNavigation.SelectedMap;
+        set => MapNavigation.SelectedMap = value;
+    }
+
+    private MapInfoModel? OverlayMap
+    {
+        get => MapNavigation.OverlayMap;
+        set => MapNavigation.OverlayMap = value;
+    }
+
+    #endregion
+
+    #region Lifecycle Methods
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // Parse query string parameters for bookmark support
+            var uri = new Uri(Navigation.Uri);
+            var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+
+            if (int.TryParse(query["map"], out var mapId)) MapId = mapId;
+            if (int.TryParse(query["x"], out var x)) GridX = x;
+            if (int.TryParse(query["y"], out var y)) GridY = y;
+            if (int.TryParse(query["z"], out var z)) Zoom = z;
+            if (int.TryParse(query["character"], out var characterId)) CharacterId = characterId;
+
+            Logger.LogInformation("URL Parameters parsed - MapId: {MapId}, GridX: {GridX}, GridY: {GridY}, Zoom: {Zoom}, CharacterId: {CharacterId}",
+                MapId, GridX, GridY, Zoom, CharacterId);
+
+            // Check for Map permission first
+            var config = await MapData.GetConfigAsync();
+
+            hasMapPermission = config.Permissions.Any(a => a.Equals(Permission.Map.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+
+            if (!hasMapPermission)
+            {
+                permissionCheckTimer = new Timer(CheckForMapPermission, null, 10000, 10000);
+                Logger.LogInformation("User lacks Map permission. Starting permission check timer.");
+                return;
+            }
+
+            // Load initial data in parallel
+            var markersTask = MapData.GetMarkersAsync();
+            var mapsTask = MapData.GetMapsAsync();
+
+            await Task.WhenAll(markersTask, mapsTask);
+
+            var markers = await markersTask;
+            var mapsDict = await mapsTask;
+
+            // Populate services
+            MarkerState.SetMarkers(markers);
+
+            // Sort maps: main map first, then by priority and name
+            var mapsList = mapsDict.Values
+                .OrderByDescending(m => m.MapInfo.IsMainMap)  // Main map first
+                .ThenByDescending(m => m.MapInfo.Priority)     // Higher priority next
+                .ThenBy(m => m.MapInfo.Name)                   // Alphabetically
+                .ToList();
+            MapNavigation.SetMaps(mapsList);
+
+            state.Permissions = config.Permissions;
+
+            // Check permissions
+            hasMapPermission = state.Permissions.Any(a => a.Equals(Permission.Map.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+            hasMarkersPermission = state.Permissions.Any(a => a.Equals(Permission.Markers.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+
+            // Determine initial map selection
+            if (MapId.HasValue && mapsDict.TryGetValue(MapId.Value.ToString(), out var routedMap))
+            {
+                // URL parameter takes precedence
+                MapNavigation.ChangeMap(routedMap.ID);
+                state.CurrentMapId = routedMap.ID;
+            }
+            else if (config.MainMapId.HasValue && mapsDict.TryGetValue(config.MainMapId.Value.ToString(), out var mainMap))
+            {
+                // Select main map if configured
+                MapNavigation.ChangeMap(mainMap.ID);
+                state.CurrentMapId = mainMap.ID;
+            }
+            else if (mapsList.Count > 0)
+            {
+                // Fall back to first map in sorted list
+                MapNavigation.ChangeMap(mapsList[0].ID);
+                state.CurrentMapId = mapsList[0].ID;
+            }
+
+            // Load custom markers for the current map
+            if (hasMarkersPermission && MapNavigation.CurrentMapId > 0)
+            {
+                await LoadCustomMarkersAsync();
+            }
+
+            // NOTE: Circuit event subscription moved to OnAfterRenderAsync to avoid race conditions during init
+
+            // Subscribe to breakpoint changes (don't fire immediately to avoid illegal StateHasChanged during init)
+            await BrowserViewportService.SubscribeAsync(this, fireImmediately: false);
+
+            // Manually set initial sidebar state based on current breakpoint
+            var currentBreakpoint = await BrowserViewportService.GetCurrentBreakpointAsync();
+            isSidebarOpen = currentBreakpoint >= Breakpoint.Lg;
+            // No StateHasChanged needed - we're already in OnInitializedAsync render cycle
+
+            // Set up polling timer for markers
+            markerUpdateTimer = new Timer(UpdateMarkers, null, 60000, 60000);
+
+            isLoaded = true;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                                              ex.StatusCode == System.Net.HttpStatusCode.Found)
+        {
+            Logger.LogError(ex, "Authentication failed during map initialization");
+            Snackbar.Add("Authentication failed. Please refresh the page.", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error initializing map");
+            Snackbar.Add("Failed to load map. Please refresh the page.", Severity.Error);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Wrap entire method in try-catch to prevent circuit crashes from killing the app
+        // This is critical because user interactions (drag, zoom) can fire before circuit is ready
+        try
+        {
+            // ONE-TIME EVENT SUBSCRIPTIONS: Runs exactly once on first render
+            // These must use firstRender to ensure they only happen once
+            if (firstRender)
+            {
+                // Subscribe to circuit reconnection events BEFORE SSE initialization
+                // This ensures event handlers are registered before SSE callbacks can fire
+                ReconnectionState.OnDown += HandleCircuitDown;
+                ReconnectionState.OnUp += HandleCircuitUp;
+
+                // Wait for circuit to fully stabilize before connecting SSE
+                // This prevents "No interop methods are registered for renderer" errors
+                // when SSE events fire during circuit initialization
+                await Task.Delay(100);
+
+                // Mark circuit as fully ready for JS->NET calls
+                circuitFullyReady = true;
+
+                await InitializeBrowserSseAsync();
+            }
+
+            // NOTE: All initialization logic has been moved to event-driven handlers:
+            // - Map positioning: HandleMapInitialized (triggered by Leaflet 'load' event)
+            // - Marker loading: HandleMapInitialized (after positioning completes)
+            // This eliminates render-cycle polling and guarantees proper initialization order
+        }
+        catch (Exception ex)
+        {
+            // Log error but don't crash the circuit
+            // This prevents user interactions during init from killing the entire app
+            Logger.LogError(ex, "Error during OnAfterRenderAsync - circuit will continue");
+        }
+    }
+
+    /// <summary>
+    /// Initializes map view position from URL parameters. Runs exactly once on first render.
+    /// </summary>
+    private async Task InitializeViewFromUrlParametersAsync()
+    {
+        Logger.LogInformation("InitializeViewFromUrlParametersAsync called - MapId: {MapId}, GridX: {GridX}, GridY: {GridY}, Zoom: {Zoom}, CharacterId: {CharacterId}",
+            MapId, GridX, GridY, Zoom, CharacterId);
+
+        // Handle route parameters (from URL query string for bookmarks)
+        if (CharacterId.HasValue)
+        {
+            Logger.LogInformation("Following character: {CharacterId}", CharacterId.Value);
+            state.TrackingCharacterId = CharacterId;
+            await TrackCharacter(CharacterId.Value);
+        }
+        else if (MapId.HasValue && GridX.HasValue && GridY.HasValue && Zoom.HasValue)
+        {
+            var requestedMapId = MapId.Value;
+            Logger.LogInformation("Setting position from URL params - Map: {MapId}, Position: ({X}, {Y}), Zoom: {Z}",
+                requestedMapId, GridX.Value, GridY.Value, Zoom.Value);
+
+            if (requestedMapId > 0)
+            {
+                MapNavigation.ChangeMap(requestedMapId);
+                state.CurrentMapId = requestedMapId;
+                await mapView.ChangeMapAsync(requestedMapId);
+                await mapView.SetViewAsync(GridX.Value, GridY.Value, Zoom.Value);
+                // Synchronize MapNavigationService state to prevent position resets
+                MapNavigation.UpdatePosition(GridX.Value, GridY.Value, Zoom.Value);
+                Logger.LogInformation("Position set to ({X}, {Y}, {Z}) successfully", GridX.Value, GridY.Value, Zoom.Value);
+            }
+        }
+        else if (MapNavigation.Maps.Count > 0)
+        {
+            var firstMapId = MapNavigation.Maps[0].ID;
+            Logger.LogInformation("No URL params, using default position (0, 0, 7) on map {MapId}", firstMapId);
+            MapNavigation.ChangeMap(firstMapId);
+            state.CurrentMapId = firstMapId;
+            await mapView.ChangeMapAsync(firstMapId);
+            await mapView.SetViewAsync(0, 0, 7);
+            // Synchronize MapNavigationService state to prevent position resets
+            MapNavigation.UpdatePosition(0, 0, 7);
+        }
+        else
+        {
+            Logger.LogWarning("No maps available, cannot initialize position");
+        }
+
+        // Clear query string parameters after initial use to prevent them from being re-applied on subsequent renders
+        MapId = null;
+        GridX = null;
+        GridY = null;
+        Zoom = null;
+        CharacterId = null;
+    }
+
+    /// <summary>
+    /// Loads markers for the current map. This is separated from initialization to prevent
+    /// marker-related re-renders from affecting map positioning.
+    /// Called from HandleMapInitialized after map is ready (event-driven, no delays needed).
+    /// </summary>
+    private async Task LoadMarkersForCurrentMapAsync()
+    {
+        // Ensure JavaScript map is set before loading markers to prevent filtering mismatches
+        if (MapNavigation.CurrentMapId > 0 && mapView != null)
+        {
+            await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
+
+            // No delay needed - this is called from HandleMapInitialized after Leaflet 'load' event
+            // The map is guaranteed to be ready at this point (event-driven architecture)
+
+            // Load markers for current map
+            var markersToLoad = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+            foreach (var marker in markersToLoad)
+            {
+                await mapView.AddMarkerAsync(marker);
+            }
+
+            // Load custom markers
+            await TryRenderPendingCustomMarkersAsync();
+        }
+
+        // Note: No StateHasChanged() here - marker loading should NOT trigger component re-render
+        // Markers are rendered directly via JavaScript interop
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        ReconnectionState.OnDown -= HandleCircuitDown;
+        ReconnectionState.OnUp -= HandleCircuitUp;
+
+        await BrowserViewportService.UnsubscribeAsync(this);
+
+        markerUpdateTimer?.Dispose();
+        permissionCheckTimer?.Dispose();
+
+        if (sseModule != null)
+        {
+            try
+            {
+                await sseModule.InvokeVoidAsync("disconnectSseUpdates");
+                await sseModule.DisposeAsync();
+            }
+            catch { }
+            sseModule = null;
+        }
+
+        if (leafletModule != null)
+        {
+            try
+            {
+                await leafletModule.DisposeAsync();
+            }
+            catch { }
+            leafletModule = null;
+        }
+
+        sseDotnetRef?.Dispose();
+        sseDotnetRef = null;
+
+        if (mapView != null)
+        {
+            await mapView.DisposeAsync();
+        }
+    }
+
+    #endregion
+
+    #region Polling Methods
+
+    private async void UpdateMarkers(object? timerState)
+    {
+        try
+        {
+            if (!AuthStateCache.IsAuthenticated || string.IsNullOrEmpty(AuthStateCache.CookieValue))
+            {
+                // Retry with exponential backoff instead of immediately failing
+                if (markerUpdateRetryCount < MaxMarkerUpdateRetries)
+                {
+                    markerUpdateRetryCount++;
+                    var delaySeconds = Math.Pow(2, markerUpdateRetryCount); // 2s, 4s, 8s
+                    Logger.LogWarning(
+                        "Authentication state not available for marker update. Retry {RetryCount}/{MaxRetries} in {DelaySeconds}s.",
+                        markerUpdateRetryCount, MaxMarkerUpdateRetries, delaySeconds);
+
+                    // Reschedule timer with exponential backoff delay
+                    markerUpdateTimer?.Change(TimeSpan.FromSeconds(delaySeconds), TimeSpan.FromMilliseconds(-1));
+                    return;
+                }
+
+                // All retries exhausted - stop timer and show error
+                Logger.LogWarning("Authentication state not available after {RetryCount} retries. Stopping timer.", MaxMarkerUpdateRetries);
+                await InvokeAsync(() =>
+                {
+                    Snackbar.Add("Authentication lost. Marker updates stopped. Please refresh the page.", Severity.Warning);
+                    StateHasChanged();
+                });
+                markerUpdateTimer?.Dispose();
+                markerUpdateTimer = null;
+                return;
+            }
+
+            var markers = await MapData.GetMarkersAsync();
+
+            // Reset retry counter on successful update
+            markerUpdateRetryCount = 0;
+
+            await InvokeAsync(async () =>
+            {
+                var result = MarkerState.UpdateFromApi(markers, MapNavigation.CurrentMapId);
+
+                // Update map view
+                if (mapView != null)
+                {
+                    foreach (var marker in result.AddedMarkers)
+                    {
+                        await mapView.AddMarkerAsync(marker);
+                    }
+
+                    foreach (var marker in result.UpdatedMarkers)
+                    {
+                        await mapView.UpdateMarkerAsync(marker);
+                    }
+
+                    foreach (var markerId in result.RemovedMarkerIds)
+                    {
+                        await mapView.RemoveMarkerAsync(markerId);
+                    }
+                }
+
+                StateHasChanged();
+            });
+
+            // Reset timer to normal 60s interval after successful update
+            markerUpdateTimer?.Change(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                                              ex.StatusCode == System.Net.HttpStatusCode.NotFound ||
+                                              ex.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+                                              ex.StatusCode == System.Net.HttpStatusCode.Found)
+        {
+            // Retry with exponential backoff for HTTP auth errors
+            if (markerUpdateRetryCount < MaxMarkerUpdateRetries)
+            {
+                markerUpdateRetryCount++;
+                var delaySeconds = Math.Pow(2, markerUpdateRetryCount); // 2s, 4s, 8s
+                Logger.LogWarning(
+                    "Authentication failed while updating markers (Status: {StatusCode}). Retry {RetryCount}/{MaxRetries} in {DelaySeconds}s.",
+                    ex.StatusCode, markerUpdateRetryCount, MaxMarkerUpdateRetries, delaySeconds);
+
+                // Reschedule timer with exponential backoff delay
+                markerUpdateTimer?.Change(TimeSpan.FromSeconds(delaySeconds), TimeSpan.FromMilliseconds(-1));
+                return;
+            }
+
+            // All retries exhausted - stop timer and show error
+            Logger.LogWarning("Authentication failed after {RetryCount} retries (Status: {StatusCode}). Stopping timer.", MaxMarkerUpdateRetries, ex.StatusCode);
+            await InvokeAsync(() =>
+            {
+                var message = ex.StatusCode switch
+                {
+                    System.Net.HttpStatusCode.Unauthorized => "Authentication failed. Marker updates stopped. Please refresh the page.",
+                    System.Net.HttpStatusCode.Found => "Authentication session expired. Marker updates stopped. Please refresh the page.",
+                    _ => "Failed to update markers. Updates stopped."
+                };
+                Snackbar.Add(message, Severity.Warning);
+                StateHasChanged();
+            });
+            markerUpdateTimer?.Dispose();
+            markerUpdateTimer = null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error updating markers");
+            await InvokeAsync(() =>
+            {
+                Snackbar.Add("Error updating markers. Check console for details.", Severity.Error);
+                StateHasChanged();
+            });
+        }
+    }
+
+    private async void CheckForMapPermission(object? state)
+    {
+        try
+        {
+            Logger.LogDebug("Checking for Map permission update...");
+            var config = await MapData.GetConfigAsync();
+            var nowHasMapPermission = config.Permissions.Any(a => a.Equals(Permission.Map.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+
+            if (nowHasMapPermission && !hasMapPermission)
+            {
+                Logger.LogInformation("Map permission granted! Reloading page.");
+                permissionCheckTimer?.Dispose();
+                permissionCheckTimer = null;
+
+                await InvokeAsync(() =>
+                {
+                    Snackbar.Add("Map access granted! Reloading...", Severity.Success);
+                    Navigation.NavigateTo("/map", forceLoad: true);
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error checking for map permission");
+        }
+    }
+
+    #endregion
+
+    #region Event Handlers - Map Interaction
+
+    private async Task HandleMapDragged((int x, int y, int z) coords)
+    {
+        // Check if circuit is fully ready before updating URL
+        // Prevents "Cannot send data" errors during circuit initialization/reconnection
+        if (!circuitFullyReady)
+        {
+            Logger.LogDebug("HandleMapDragged called before circuit ready, dropping URL update");
+            return;  // Drop this update - another drag event will arrive soon
+        }
+
+        if (IsFollowing)
+        {
+            StopFollowing();
+        }
+
+        try
+        {
+            MapNavigation.UpdatePosition(coords.x, coords.y, coords.z);
+            Navigation.NavigateTo(MapNavigation.GetUrl(MapNavigation.CurrentMapId, coords.x, coords.y, coords.z), false);
+            state.TrackingCharacterId = null;
+        }
+        catch (Exception ex)
+        {
+            // Log navigation errors but don't crash - another drag event will retry
+            Logger.LogWarning(ex, "Failed to update URL during map drag to ({X},{Y},{Z})", coords.x, coords.y, coords.z);
+        }
+    }
+
+    private async Task HandleMapZoomed((int x, int y, int z) coords)
+    {
+        // Check if circuit is fully ready before updating URL
+        // Prevents "Cannot send data" errors during circuit initialization/reconnection
+        if (!circuitFullyReady)
+        {
+            Logger.LogDebug("HandleMapZoomed called before circuit ready, dropping URL update");
+            return;  // Drop this update - another zoom event will arrive soon
+        }
+
+        if (IsFollowing)
+        {
+            StopFollowing();
+        }
+
+        try
+        {
+            MapNavigation.UpdatePosition(coords.x, coords.y, coords.z);
+            Navigation.NavigateTo(MapNavigation.GetUrl(MapNavigation.CurrentMapId, coords.x, coords.y, coords.z), false);
+        }
+        catch (Exception ex)
+        {
+            // Log navigation errors but don't crash - another zoom event will retry
+            Logger.LogWarning(ex, "Failed to update URL during map zoom to ({X},{Y},{Z})", coords.x, coords.y, coords.z);
+        }
+    }
+
+    private async Task HandleMapInitialized(bool isReady)
+    {
+        Logger.LogInformation("Map initialized event received, starting initialization sequence");
+
+        // Set initial revisions for all maps
+        foreach (var map in MapNavigation.Maps)
+        {
+            await mapView.SetMapRevisionAsync(map.ID, map.MapInfo.Revision);
+            MapNavigation.InitializeMapRevision(map.ID, map.MapInfo.Revision);
+            Logger.LogDebug("Set initial revision for map {MapId}: {Revision}", map.ID, map.MapInfo.Revision);
+        }
+
+        // Handle route parameters and set initial view position
+        await InitializeViewFromUrlParametersAsync();
+
+        // Load markers after positioning is complete
+        // This is event-driven (triggered by Leaflet 'load') instead of render-cycle polling
+        if (mapView != null && MapNavigation.CurrentMapId > 0)
+        {
+            Logger.LogInformation("Loading markers for map {MapId}", MapNavigation.CurrentMapId);
+            await LoadMarkersForCurrentMapAsync();
+
+            // Sync character tooltip visibility with LayerVisibilityService default state
+            await mapView.ToggleCharacterTooltipsAsync(LayerVisibility.ShouldShowCharacterTooltips());
+        }
+    }
+
+    private Task HandleMapChanged(int mapId)
+    {
+        Logger.LogInformation("Map changed to {MapId}", mapId);
+        // Map change is complete - markers are already filtered by map in JavaScript
+        // No additional action needed here for now
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleContextMenu((int gridX, int gridY, int screenX, int screenY) coords)
+    {
+        contextCoords = (coords.gridX, coords.gridY);
+        contextMenuX = coords.screenX;
+        contextMenuY = coords.screenY;
+        showContextMenu = true;
+        showMarkerContextMenu = false;
+        StateHasChanged();
+    }
+
+    private async Task HandleMapRightClick((int mapId, int coordX, int coordY, int x, int y, int screenX, int screenY) data)
+    {
+        // Store coordinates for menu actions
+        mapActionMapId = data.mapId;
+        mapActionCoordX = data.coordX;
+        mapActionCoordY = data.coordY;
+        mapActionX = data.x;
+        mapActionY = data.y;
+        contextMenuX = data.screenX;
+        contextMenuY = data.screenY;
+
+        // Show map action menu
+        showMapActionMenu = true;
+        showContextMenu = false;
+        showMarkerContextMenu = false;
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleMapClick()
+    {
+        if (showContextMenu || showMarkerContextMenu || showMapActionMenu)
+        {
+            showContextMenu = false;
+            showMarkerContextMenu = false;
+            showMapActionMenu = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleGoToPing()
+    {
+        if (mapView != null)
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+            var success = await leafletModule.InvokeAsync<bool>("jumpToLatestPing");
+
+            if (!success)
+            {
+                Snackbar.Add("No pings available", Severity.Info);
+            }
+        }
+    }
+
+    private async Task HandleMarkerClicked(int markerId)
+    {
+        if (mapView != null)
+        {
+            await mapView.JumpToMarkerAsync(markerId);
+        }
+    }
+
+    private async Task HandleMarkerContextMenu(int markerId)
+    {
+        contextMarkerId = markerId;
+        showMarkerContextMenu = true;
+        showContextMenu = false;
+        StateHasChanged();
+    }
+
+    #endregion
+
+    #region Event Handlers - Map Controls
+
+    private async Task HandleToggleGridCoordinates()
+    {
+        LayerVisibility.ToggleGridCoordinates();
+        state.ShowGridCoordinates = LayerVisibility.ShowGridCoordinates;
+        if (mapView != null)
+        {
+            await mapView.ToggleGridCoordinatesAsync(LayerVisibility.ShowGridCoordinates);
+        }
+    }
+
+    private async Task HandleZoomOut()
+    {
+        if (mapView != null)
+        {
+            await mapView.ZoomOutAsync();
+        }
+    }
+
+    private async Task HandleZoomIn()
+    {
+        if (mapView != null)
+        {
+            var currentZoom = MapNavigation.Zoom;
+            if (currentZoom < 7)
+            {
+                await mapView.SetViewAsync((int)MapNavigation.CenterX, (int)MapNavigation.CenterY, currentZoom + 1);
+            }
+        }
+    }
+
+    private async Task HandleResetView()
+    {
+        if (mapView != null && MapNavigation.Maps.Count > 0)
+        {
+            await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
+            await mapView.SetViewAsync(0, 0, 7);
+            MapNavigation.UpdatePosition(0, 0, 7);
+            Navigation.NavigateTo(MapNavigation.GetUrl(MapNavigation.CurrentMapId, 0, 0, 7), false);
+        }
+    }
+
+    private async Task HandleMapSelected(MapInfoModel? map)
+    {
+        if (map != null && mapView != null)
+        {
+            MapNavigation.ChangeMap(map.ID);
+            state.CurrentMapId = map.ID;
+            await mapView.ChangeMapAsync(map.ID);
+
+            await RebuildMarkersForCurrentMap();
+
+            var cx = (int)MapNavigation.CenterX;
+            var cy = (int)MapNavigation.CenterY;
+            await mapView.SetViewAsync(cx, cy, MapNavigation.Zoom);
+            Navigation.NavigateTo(MapNavigation.GetUrl(map.ID, cx, cy, MapNavigation.Zoom), false);
+
+            CustomMarkerState.MarkAsNeedingRender();
+            await TryRenderPendingCustomMarkersAsync();
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleOverlayMapSelected(MapInfoModel? map)
+    {
+        if (mapView != null)
+        {
+            MapNavigation.ChangeOverlayMap(map?.ID);
+            await mapView.SetOverlayMapAsync(map?.ID);
+        }
+    }
+
+    private async Task HandleMapSelectedInternal(MapInfoModel? map)
+    {
+        if (map != null)
+        {
+            SelectedMap = map;
+            await HandleMapSelected(map);
+        }
+    }
+
+    private async Task HandleOverlayMapSelectedInternal(MapInfoModel? map)
+    {
+        OverlayMap = map;
+        await HandleOverlayMapSelected(map);
+    }
+
+    private async Task HandleToggleGridCoordinates(bool value)
+    {
+        LayerVisibility.ShowGridCoordinates = value;
+        state.ShowGridCoordinates = value;
+        if (mapView != null)
+        {
+            await mapView.ToggleGridCoordinatesAsync(value);
+        }
+    }
+
+    #endregion
+
+    #region Event Handlers - Player/Marker Selection
+
+    private async Task SelectPlayer(CharacterModel character)
+    {
+        CharacterTracking.StartFollowing(character.Id);
+        state.TrackingCharacterId = character.Id;
+
+        await CenterOnCharacterAsync(character, switchMap: true);
+        await CloseSidebarOnMobileAsync();
+    }
+
+    private async Task SelectMarker(MarkerModel marker)
+    {
+        if (mapView != null)
+        {
+            if (MapNavigation.CurrentMapId != marker.Map)
+            {
+                MapNavigation.ChangeMap(marker.Map);
+                state.CurrentMapId = marker.Map;
+                await mapView.ChangeMapAsync(marker.Map);
+
+                await RebuildMarkersForCurrentMap();
+
+                Navigation.NavigateTo(MapNavigation.GetUrl(marker.Map, 0, 0, MapNavigation.Zoom), false);
+
+                CustomMarkerState.MarkAsNeedingRender();
+                await TryRenderPendingCustomMarkersAsync();
+            }
+
+            await mapView.JumpToMarkerAsync(marker.Id);
+            await CloseSidebarOnMobileAsync();
+        }
+    }
+
+    private void StopFollowing()
+    {
+        CharacterTracking.StopFollowing();
+        state.TrackingCharacterId = null;
+        Snackbar.Add("Stopped following player", Severity.Info, config => config.VisibleStateDuration = 1500);
+    }
+
+    private async Task HandleCharacterSelected(CharacterModel character)
+    {
+        await SelectPlayer(character);
+    }
+
+    private async Task HandleMarkerSelected(MarkerModel marker)
+    {
+        if (mapView != null)
+        {
+            await mapView.JumpToMarkerAsync(marker.Id);
+        }
+    }
+
+    private async Task SelectCustomMarker(CustomMarkerViewModel marker)
+    {
+        await CloseSidebarOnMobileAsync();
+
+        if (mapView != null)
+        {
+            Logger.LogInformation("Selecting custom marker {MarkerId} ({Title}) on map {MapId}", marker.Id, marker.Title, marker.MapId);
+
+            if (MapNavigation.CurrentMapId != marker.MapId)
+            {
+                MapNavigation.ChangeMap(marker.MapId);
+                state.CurrentMapId = marker.MapId;
+                await mapView.ChangeMapAsync(marker.MapId);
+
+                await RebuildMarkersForCurrentMap();
+
+                Navigation.NavigateTo(MapNavigation.GetUrl(marker.MapId, 0, 0, MapNavigation.Zoom), false);
+
+                CustomMarkerState.MarkAsNeedingRender();
+                await TryRenderPendingCustomMarkersAsync();
+            }
+            else
+            {
+                await TryRenderPendingCustomMarkersAsync();
+            }
+
+            await JS.InvokeVoidAsync("console.log", $"[CustomMarker] .NET requesting jump to marker {marker.Id} ({marker.Title})");
+            await mapView.JumpToCustomMarkerAsync(marker.Id, 6);
+        }
+    }
+
+    #endregion
+
+    #region Event Handlers - Layer Toggles
+
+    private async Task HandleLayerToggle(Action action)
+    {
+        action();
+        await SyncLayerVisibility();
+    }
+
+    private async Task HandleStateChanged()
+    {
+        await SyncLayerVisibility();
+    }
+
+    #endregion
+
+    #region Event Handlers - Context Menu Actions
+
+    private async Task HandleWipeTile()
+    {
+        showContextMenu = false;
+        try
+        {
+            var success = await MapData.WipeTileAsync(MapNavigation.CurrentMapId, contextCoords.x, contextCoords.y);
+            if (success)
+            {
+                Snackbar.Add($"Tile at ({contextCoords.x}, {contextCoords.y}) wiped successfully.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Failed to wipe tile. Check console for details.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error wiping tile");
+            Snackbar.Add("Error wiping tile. Check console for details.", Severity.Error);
+        }
+    }
+
+    private async Task HandleSetCoords()
+    {
+        showContextMenu = false;
+        Logger.LogInformation("Set coords for tile {X}, {Y}", contextCoords.x, contextCoords.y);
+    }
+
+    private async Task HandleHideMarker(int markerId)
+    {
+        showMarkerContextMenu = false;
+        try
+        {
+            var success = await MapData.HideMarkerAsync(markerId);
+            if (success)
+            {
+                if (mapView != null)
+                {
+                    await mapView.RemoveMarkerAsync(markerId);
+                }
+                MarkerState.RemoveMarker(markerId);
+                Snackbar.Add("Marker hidden successfully.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Failed to hide marker. Check console for details.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error hiding marker");
+            Snackbar.Add("Error hiding marker. Check console for details.", Severity.Error);
+        }
+    }
+
+    private async Task HandleDeleteMarker(int markerId)
+    {
+        showMarkerContextMenu = false;
+        try
+        {
+            var success = await MapData.DeleteMarkerAsync(markerId);
+            if (success)
+            {
+                if (mapView != null)
+                {
+                    await mapView.RemoveMarkerAsync(markerId);
+                }
+                MarkerState.RemoveMarker(markerId);
+                Snackbar.Add("Marker deleted successfully.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Failed to delete marker. Check console for details.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error deleting marker");
+            Snackbar.Add("Error deleting marker. Check console for details.", Severity.Error);
+        }
+    }
+
+    #endregion
+
+    #region Event Handlers - SSE Updates
+
+    private void HandleTileUpdates(List<TileUpdate> updates)
+    {
+        if (mapView == null) return;
+
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                if (mapView != null)
+                {
+                    foreach (var update in updates)
+                    {
+                        await mapView.RefreshTileAsync(update.M, update.X, update.Y, update.Z, update.T);
+                    }
+                }
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        });
+    }
+
+    private void HandleMapMerge(MapMerge merge)
+    {
+        InvokeAsync(async () =>
+        {
+            if (MapNavigation.CurrentMapId == merge.From && mapView != null)
+            {
+                Logger.LogInformation("Map merged from {From} to {To}", merge.From, merge.To);
+                Snackbar.Add($"Map {merge.From} was merged into map {merge.To}. Switching view.", Severity.Info);
+
+                var preserveCenterX = (int)MapNavigation.CenterX;
+                var preserveCenterY = (int)MapNavigation.CenterY;
+                var preserveZoom = MapNavigation.Zoom;
+
+                MapNavigation.ChangeMap(merge.To);
+                state.CurrentMapId = merge.To;
+                await mapView.ChangeMapAsync(merge.To);
+
+                var markers = await MapData.GetMarkersAsync();
+                MarkerState.SetMarkers(markers);
+
+                await mapView.SetViewAsync(preserveCenterX, preserveCenterY, preserveZoom);
+                CustomMarkerState.MarkAsNeedingRender();
+                await TryRenderPendingCustomMarkersAsync();
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void HandleMapUpdated(MapInfoModel updatedMap)
+    {
+        InvokeAsync(() =>
+        {
+            var existingMap = MapNavigation.GetMapById(updatedMap.ID);
+            if (existingMap != null)
+            {
+                var wasHidden = existingMap.MapInfo.Hidden;
+                MapNavigation.AddOrUpdateMap(updatedMap);
+
+                if (SelectedMap?.ID == updatedMap.ID)
+                {
+                    SelectedMap = updatedMap;
+                }
+
+                if (OverlayMap?.ID == updatedMap.ID)
+                {
+                    OverlayMap = updatedMap;
+                }
+
+                if (!wasHidden && updatedMap.MapInfo.Hidden && MapNavigation.CurrentMapId == updatedMap.ID)
+                {
+                    var firstVisible = MapNavigation.GetFirstVisibleMap();
+                    if (firstVisible != null && mapView != null)
+                    {
+                        Logger.LogInformation("Current map {MapId} became hidden, switching to {NewMapId}", updatedMap.ID, firstVisible.ID);
+                        Snackbar.Add($"Map '{updatedMap.MapInfo.Name}' is now hidden. Switched to '{firstVisible.MapInfo.Name}'.", Severity.Info);
+                        MapNavigation.ChangeMap(firstVisible.ID);
+                        state.CurrentMapId = firstVisible.ID;
+                        SelectedMap = firstVisible;
+                        _ = mapView.ChangeMapAsync(firstVisible.ID);
+                    }
+                }
+
+                Logger.LogInformation("Map {MapId} updated: {Name}, Hidden={Hidden}, Priority={Priority}",
+                    updatedMap.ID, updatedMap.MapInfo.Name, updatedMap.MapInfo.Hidden, updatedMap.MapInfo.Priority);
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void HandleMapRevision(int mapId, int revision)
+    {
+        InvokeAsync(async () =>
+        {
+            if (mapView != null && !isReconnecting)
+            {
+                await mapView.SetMapRevisionAsync(mapId, revision);
+                MapNavigation.SetMapRevision(mapId, revision);
+                Logger.LogDebug("Map {MapId} revision updated to {Revision}", mapId, revision);
+
+                if (MapNavigation.CurrentMapId == mapId)
+                {
+                    StateHasChanged();
+                }
+            }
+        });
+    }
+
+    #endregion
+
+    #region SSE JavaScript Callbacks
+
+    [JSInvokable]
+    public void OnSseTileUpdates(List<TileUpdate> updates)
+    {
+        HandleTileUpdates(updates);
+    }
+
+    [JSInvokable]
+    public void OnSseMapMerge(MapMerge merge)
+    {
+        HandleMapMerge(merge);
+    }
+
+    [JSInvokable]
+    public void OnSseMapUpdated(MapInfoModel updatedMap)
+    {
+        HandleMapUpdated(updatedMap);
+    }
+
+    [JSInvokable]
+    public void OnSseMapDeleted(int deletedMapId)
+    {
+        HandleMapDeleted(deletedMapId);
+    }
+
+    [JSInvokable]
+    public void OnSseMapRevision(int mapId, int revision)
+    {
+        HandleMapRevision(mapId, revision);
+    }
+
+    [JSInvokable]
+    public async Task OnSseCharactersSnapshot(List<CharacterModel> characters)
+    {
+        // Check if circuit is fully ready (prevents "No interop methods registered" errors)
+        if (!circuitFullyReady)
+        {
+            Logger.LogWarning("OnSseCharactersSnapshot called before circuit ready, waiting briefly...");
+            await Task.Delay(50);  // Brief wait for circuit to finish initialization
+            if (!circuitFullyReady)
+            {
+                Logger.LogWarning("Circuit still not ready after delay, dropping characters snapshot");
+                return;  // Drop this callback - another snapshot will arrive soon
+            }
+        }
+
+        Logger.LogDebug("Received SSE characters snapshot with {Count} characters", characters.Count);
+
+        // Serialize SSE callbacks to prevent concurrent character state updates
+        await sseCallbackLock.WaitAsync();
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                try
+                {
+                    CharacterTracking.HandleCharactersSnapshot(characters);
+
+                    if (mapView != null)
+                    {
+                        await mapView.SetCharactersSnapshotAsync(characters);
+
+                        // Sync character tooltip visibility after loading characters
+                        await mapView.ToggleCharacterTooltipsAsync(LayerVisibility.ShouldShowCharacterTooltips());
+                    }
+                    else
+                    {
+                        Logger.LogWarning("mapView is null in OnSseCharactersSnapshot, cannot update map");
+                    }
+
+                    StateHasChanged();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Exception processing SSE characters snapshot");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Exception in OnSseCharactersSnapshot");
+        }
+        finally
+        {
+            sseCallbackLock.Release();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnSseCharacterDelta(CharacterDeltaModel delta)
+    {
+        // Check if circuit is fully ready (prevents "No interop methods registered" errors)
+        if (!circuitFullyReady)
+        {
+            Logger.LogDebug("OnSseCharacterDelta called before circuit ready, dropping delta");
+            return;  // Drop this delta - another will arrive soon
+        }
+
+        // Serialize SSE callbacks to prevent concurrent character state updates
+        await sseCallbackLock.WaitAsync();
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                var result = CharacterTracking.HandleCharacterDelta(delta);
+
+                if (mapView != null)
+                {
+                    await mapView.ApplyCharacterDeltaAsync(delta);
+                }
+
+                if (result.ShouldStopFollowing)
+                {
+                    StopFollowing();
+                }
+
+                // Follow mode: keep camera centered on followed character
+                if (IsFollowing && FollowingCharacterId.HasValue && mapView != null)
+                {
+                    var followed = CharacterTracking.GetCharacterById(FollowingCharacterId.Value);
+                    if (followed != null)
+                    {
+                        if (MapNavigation.CurrentMapId != followed.Map)
+                        {
+                            MapNavigation.ChangeMap(followed.Map);
+                            state.CurrentMapId = followed.Map;
+                            await mapView.ChangeMapAsync(followed.Map);
+                        }
+
+                        await mapView.JumpToCharacterAsync(followed.Id);
+                    }
+                }
+
+                StateHasChanged();
+            });
+        }
+        finally
+        {
+            sseCallbackLock.Release();
+        }
+    }
+
+    private void HandleCircuitDown()
+    {
+        InvokeAsync(() =>
+        {
+            isReconnecting = true;
+
+            markerUpdateTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+
+            if (sseModule != null)
+            {
+                try
+                {
+                    _ = sseModule.InvokeVoidAsync("disconnectSseUpdates");
+                }
+                catch { }
+            }
+
+            Logger.LogInformation("Circuit disconnected - pausing updates");
+            Snackbar.Add("Connection lost. Reconnecting...", Severity.Warning);
+
+            StateHasChanged();
+        });
+    }
+
+    private void HandleCircuitUp()
+    {
+        InvokeAsync(async () =>
+        {
+            isReconnecting = false;
+
+            Logger.LogInformation("Circuit reconnected - rehydrating state");
+
+            markerUpdateTimer?.Change(60000, 60000);
+
+            if (sseModule != null && sseDotnetRef != null)
+            {
+                try
+                {
+                    await sseModule.InvokeVoidAsync("initializeSseUpdates", sseDotnetRef);
+                    Logger.LogInformation("Browser SSE reconnected after circuit recovery");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to reconnect browser SSE after circuit recovery");
+                }
+            }
+
+            if (mapView != null)
+            {
+                try
+                {
+                    await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
+
+                    // Diagnostic: Log if this was attempting to restore view (could cause zoom resets)
+                    Logger.LogWarning("Circuit reconnection - NOT restoring view position. Previous coords: ({X},{Y}) zoom {Zoom}",
+                        MapNavigation.CenterX, MapNavigation.CenterY, MapNavigation.Zoom);
+
+                    // REMOVED: await mapView.SetViewAsync(...) - This was causing random zoom resets
+                    // User's current view position should be preserved by Leaflet across circuit reconnections
+
+                    if (MapNavigation.OverlayMapId.HasValue)
+                    {
+                        await mapView.SetOverlayMapAsync(MapNavigation.OverlayMapId);
+                    }
+
+                    foreach (var map in MapNavigation.Maps)
+                    {
+                        await mapView.SetMapRevisionAsync(map.ID, map.MapInfo.Revision);
+                    }
+
+                    Logger.LogInformation("Map state rehydrated successfully");
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to rehydrate map state after reconnect");
+                }
+            }
+
+            CustomMarkerState.MarkAsNeedingRender();
+            await TryRenderPendingCustomMarkersAsync();
+
+            Snackbar.Add("Reconnected successfully", Severity.Success);
+            StateHasChanged();
+        });
+    }
+
+    private void HandleMapDeleted(int deletedMapId)
+    {
+        InvokeAsync(async () =>
+        {
+            var removedMap = MapNavigation.GetMapById(deletedMapId);
+            if (removedMap != null)
+            {
+                MapNavigation.RemoveMap(deletedMapId);
+
+                if (MapNavigation.CurrentMapId == deletedMapId)
+                {
+                    var firstMap = MapNavigation.GetFirstVisibleMap();
+                    if (firstMap != null && mapView != null)
+                    {
+                        Logger.LogInformation("Current map {MapId} was deleted, switching to {NewMapId}", deletedMapId, firstMap.ID);
+                        Snackbar.Add($"Map '{removedMap.MapInfo.Name}' was deleted. Switched to '{firstMap.MapInfo.Name}'.", Severity.Warning);
+                        MapNavigation.ChangeMap(firstMap.ID);
+                        state.CurrentMapId = firstMap.ID;
+                        SelectedMap = firstMap;
+                        await mapView.ChangeMapAsync(firstMap.ID);
+                        CustomMarkerState.MarkAsNeedingRender();
+                        await TryRenderPendingCustomMarkersAsync();
+                    }
+                    else
+                    {
+                        Snackbar.Add($"Map '{removedMap.MapInfo.Name}' was deleted. No maps available.", Severity.Warning);
+                    }
+                }
+
+                if (OverlayMap?.ID == deletedMapId)
+                {
+                    Logger.LogInformation("Overlay map {MapId} was deleted, clearing overlay", deletedMapId);
+                    OverlayMap = null;
+                    MapNavigation.ChangeOverlayMap(null);
+                    if (mapView != null)
+                    {
+                        await mapView.SetOverlayMapAsync(null);
+                    }
+                }
+
+                Logger.LogInformation("Map {MapId} deleted from viewer", deletedMapId);
+                StateHasChanged();
+            }
+        });
+    }
+
+    #endregion
+
+    #region Helper Methods
+
+    private string GetMapName(int mapId)
+    {
+        return MapNavigation.GetMapName(mapId);
+    }
+
+    private async Task CenterOnCharacterAsync(CharacterModel character, bool switchMap)
+    {
+        if (mapView == null) return;
+
+        if (switchMap && MapNavigation.CurrentMapId != character.Map)
+        {
+            MapNavigation.ChangeMap(character.Map);
+            state.CurrentMapId = character.Map;
+            await mapView.ChangeMapAsync(character.Map);
+
+            await mapView.ClearAllCharactersAsync();
+            foreach (var ch in CharacterTracking.GetCharactersForMap(character.Map))
+            {
+                await mapView.AddCharacterAsync(ch);
+            }
+
+            // Sync character tooltip visibility after adding characters
+            await mapView.ToggleCharacterTooltipsAsync(LayerVisibility.ShouldShowCharacterTooltips());
+
+            await RebuildMarkersForCurrentMap();
+
+            Navigation.NavigateTo(MapNavigation.GetUrl(character.Map, 0, 0, MapNavigation.Zoom), false);
+
+            CustomMarkerState.MarkAsNeedingRender();
+            await TryRenderPendingCustomMarkersAsync();
+        }
+
+        await mapView.JumpToCharacterAsync(character.Id);
+    }
+
+    private async Task TrackCharacter(int characterId)
+    {
+        if (mapView != null)
+        {
+            await mapView.JumpToCharacterAsync(characterId);
+            Navigation.NavigateTo(MapNavigation.GetCharacterUrl(characterId), false);
+        }
+    }
+
+    private async Task RebuildMarkersForCurrentMap()
+    {
+        if (mapView == null) return;
+
+        await mapView.ClearAllMarkersAsync();
+
+        foreach (var marker in MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId))
+        {
+            await mapView.AddMarkerAsync(marker);
+        }
+    }
+
+    /// <summary>
+    /// Synchronizes layer visibility state with the map view.
+    /// Note: AddMarkerAsync is idempotent - JavaScript (marker-manager.js) handles duplicate adds gracefully.
+    /// This method is called only when user explicitly toggles layer visibility, not on every render.
+    /// </summary>
+    private async Task SyncLayerVisibility()
+    {
+        if (mapView == null) return;
+
+        await mapView.ToggleCharacterTooltipsAsync(LayerVisibility.ShouldShowCharacterTooltips());
+
+        // Only sync markers for the current map (not all maps)
+        foreach (var marker in MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId))
+        {
+            bool shouldShow = LayerVisibility.ShouldShowMarker(marker);
+
+            if (shouldShow)
+            {
+                // AddMarkerAsync is idempotent - marker-manager.js skips if marker already exists
+                await mapView.AddMarkerAsync(marker);
+            }
+            else
+            {
+                await mapView.RemoveMarkerAsync(marker.Id);
+            }
+        }
+
+        if (LayerVisibility.ShowThingwalls && LayerVisibility.ShowMarkers)
+        {
+            await mapView.ToggleMarkerTooltipsAsync("thingwall", LayerVisibility.ShowThingwallTooltips);
+        }
+        if (LayerVisibility.ShowQuests && LayerVisibility.ShowMarkers)
+        {
+            await mapView.ToggleMarkerTooltipsAsync("quest", LayerVisibility.ShowQuestTooltips);
+        }
+    }
+
+    private void SetMode(SidebarMode mode)
+    {
+        sidebarMode = mode;
+        StateHasChanged();
+    }
+
+    private string DrawerWidthCss => "min(400px, 85vw)";
+
+    private string GetDrawerWidthForFab()
+    {
+        return "clamp(400px, 85vw, 100vw)";
+    }
+
+    private async Task CloseSidebarOnMobileAsync()
+    {
+        try
+        {
+            var currentBreakpoint = await BrowserViewportService.GetCurrentBreakpointAsync();
+
+            if (currentBreakpoint < Breakpoint.Lg && isSidebarOpen)
+            {
+                isSidebarOpen = false;
+                Logger.LogDebug("Closed sidebar on {Breakpoint} device after user interaction", currentBreakpoint);
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to check breakpoint for sidebar auto-close");
+        }
+    }
+
+    private string GetMenuButtonStyle()
+    {
+        var rightPosition = isSidebarOpen ? $"calc({DrawerWidthCss} + 16px)" : "16px";
+        var visibility = isSidebarOpen ? "var(--fab-visibility, visible)" : "visible";
+
+        return $"position: fixed; top: 80px; right: {rightPosition}; z-index: 1400; transition: right 0.3s ease; visibility: {visibility};";
+    }
+
+    private string GetAddMarkerButtonStyle()
+    {
+        var rightPosition = isSidebarOpen ? $"calc({DrawerWidthCss} + 16px)" : "16px";
+        return $"position: fixed; bottom: 16px; right: {rightPosition}; z-index: 1400; transition: right 0.3s ease;";
+    }
+
+    #endregion
+
+    #region Custom Markers
+
+    private async Task LoadCustomMarkersAsync()
+    {
+        if (MapNavigation.CurrentMapId == 0) return;
+
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync($"/map/api/v1/custom-markers?mapId={MapNavigation.CurrentMapId}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var markers = await response.Content.ReadFromJsonAsync<List<CustomMarkerViewModel>>(CamelCaseJsonOptions)
+                    ?? new();
+                CustomMarkerState.SetCustomMarkers(markers);
+                Logger.LogDebug("Loaded {Count} custom markers for map {MapId}", markers.Count, MapNavigation.CurrentMapId);
+            }
+            else
+            {
+                Logger.LogWarning("Failed to load custom markers: {StatusCode}", response.StatusCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading custom markers");
+        }
+    }
+
+    private async Task RenderCustomMarkersAsync()
+    {
+        if (mapView == null) return;
+
+        await mapView.ClearAllCustomMarkersAsync();
+
+        foreach (var marker in CustomMarkerState.GetCustomMarkersForMap(MapNavigation.CurrentMapId))
+        {
+            await mapView.AddCustomMarkerAsync(marker);
+        }
+
+        CustomMarkerState.MarkAsRendered();
+    }
+
+    private async Task TryRenderPendingCustomMarkersAsync()
+    {
+        // Prevent concurrent execution - skip if already running
+        if (!await customMarkerLock.WaitAsync(0))
+        {
+            Logger.LogDebug("Custom marker rendering already in progress, skipping concurrent call");
+            return;
+        }
+
+        try
+        {
+            if (!CustomMarkerState.NeedsRendering(MapNavigation.CurrentMapId, LayerVisibility.ShowCustomMarkers))
+            {
+                return;
+            }
+
+            if (mapView == null)
+            {
+                Logger.LogDebug("MapView reference not yet available; pending render deferred.");
+                return;
+            }
+
+            if (CustomMarkerState.AllCustomMarkers.Count == 0)
+            {
+                Logger.LogInformation("No custom markers loaded for map {MapId}; marking as rendered.", MapNavigation.CurrentMapId);
+                CustomMarkerState.MarkAsRendered();
+                return;
+            }
+
+            // Map is guaranteed to be initialized when called from HandleMapInitialized (event-driven)
+            // This check is now just a safety guard for edge cases
+            if (!mapView.IsInitialized)
+            {
+                Logger.LogWarning("MapView not initialized when rendering custom markers - this should not happen with event-driven architecture!");
+                return;
+            }
+
+            Logger.LogInformation("Rendering {Count} custom markers for map {MapId}.", CustomMarkerState.AllCustomMarkers.Count, MapNavigation.CurrentMapId);
+
+            if (MapNavigation.CurrentMapId > 0)
+            {
+                Logger.LogInformation("Activating map {MapId} prior to rendering custom markers.", MapNavigation.CurrentMapId);
+                await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
+            }
+
+            await RenderCustomMarkersAsync();
+        }
+        finally
+        {
+            customMarkerLock.Release();
+        }
+    }
+
+    private SemaphoreSlim _sseInitLock = new SemaphoreSlim(1, 1);
+
+    private async Task InitializeBrowserSseAsync()
+    {
+        if (!await _sseInitLock.WaitAsync(0))
+        {
+            Logger.LogDebug("SSE initialization already in progress, skipping concurrent call");
+            return;
+        }
+
+        try
+        {
+            if (sseInitialized)
+            {
+                Logger.LogDebug("SSE already initialized, skipping");
+                return;
+            }
+
+            if (mapView == null)
+            {
+                Logger.LogWarning("mapView is null, cannot initialize SSE");
+                return;
+            }
+
+            sseModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/map-updates.js");
+            sseDotnetRef ??= DotNetObjectReference.Create(this);
+            await sseModule.InvokeVoidAsync("initializeSseUpdates", sseDotnetRef);
+            Logger.LogInformation("SSE connection initialized successfully");
+            sseInitialized = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to initialize browser SSE");
+            Snackbar.Add("Failed to connect to real-time updates. Map will still work, but updates may be delayed.", Severity.Warning);
+        }
+        finally
+        {
+            _sseInitLock.Release();
+        }
+    }
+
+    private async Task RefreshCustomMarkersAsync()
+    {
+        await LoadCustomMarkersAsync();
+        CustomMarkerState.MarkAsNeedingRender();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleMarkerCreatedAsync(CustomMarkerViewModel? marker)
+    {
+        if (marker == null)
+        {
+            await RefreshCustomMarkersAsync();
+            return;
+        }
+
+        CustomMarkerState.AddOrUpdateCustomMarker(marker);
+
+        if (marker.MapId == MapNavigation.CurrentMapId && LayerVisibility.ShowCustomMarkers && mapView != null)
+        {
+            await mapView.AddCustomMarkerAsync(marker);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ShowCreateCustomMarkerDialog(int mapId, int coordX, int coordY, int x, int y)
+    {
+        if (!hasMarkersPermission)
+        {
+            Snackbar.Add("You don't have permission to create custom markers", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            { "MapId", mapId },
+            { "CoordX", coordX },
+            { "CoordY", coordY },
+            { "X", x },
+            { "Y", y },
+            { "OnMarkerCreated", EventCallback.Factory.Create<CustomMarkerViewModel?>(this, HandleMarkerCreatedAsync) }
+        };
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
+        };
+
+        await DialogService.ShowAsync<CreateCustomMarkerDialog>(
+            "Add Custom Marker",
+            parameters,
+            options);
+    }
+
+    private async Task ShowEditCustomMarkerDialog(CustomMarkerViewModel marker)
+    {
+        var parameters = new DialogParameters
+        {
+            { "MarkerId", marker.Id },
+            { "InitialTitle", marker.Title },
+            { "InitialDescription", marker.Description },
+            { "InitialIcon", marker.Icon },
+            { "InitialHidden", marker.Hidden },
+            { "PlacedAt", marker.PlacedAt },
+            { "OnMarkerUpdated", EventCallback.Factory.Create(this, RefreshCustomMarkersAsync) }
+        };
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+            CloseButton = true
+        };
+
+        await DialogService.ShowAsync<EditCustomMarkerDialog>(
+            "Edit Custom Marker",
+            parameters,
+            options);
+    }
+
+    private async Task DeleteCustomMarkerAsync(CustomMarkerViewModel marker)
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            "Delete Custom Marker",
+            $"Are you sure you want to delete the marker '{marker.Title}'?",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirm == true)
+        {
+            try
+            {
+                var httpClient = HttpClientFactory.CreateClient("API");
+                var response = await httpClient.DeleteAsync($"/map/api/v1/custom-markers/{marker.Id}");
+
+                if (response.IsSuccessStatusCode)
+                {
+                    Snackbar.Add($"Marker '{marker.Title}' deleted", Severity.Success);
+                    await RefreshCustomMarkersAsync();
+                }
+                else if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    Snackbar.Add("You don't have permission to delete this marker", Severity.Error);
+                }
+                else
+                {
+                    Snackbar.Add("Failed to delete marker", Severity.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Error deleting custom marker");
+                Snackbar.Add("Error deleting marker", Severity.Error);
+            }
+        }
+    }
+
+    private async Task OnToggleCustomMarkers(bool show)
+    {
+        LayerVisibility.ShowCustomMarkers = show;
+        state.ShowCustomMarkers = show;
+
+        if (mapView != null)
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+            await leafletModule.InvokeVoidAsync("toggleCustomMarkers", show);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnCustomMarkerCreated(CustomMarkerEventModel markerEvent)
+    {
+        if (markerEvent.MapId != MapNavigation.CurrentMapId) return;
+        await RefreshCustomMarkersAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnCustomMarkerUpdated(CustomMarkerEventModel markerEvent)
+    {
+        if (markerEvent.MapId != MapNavigation.CurrentMapId) return;
+        await RefreshCustomMarkersAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnCustomMarkerDeleted(System.Text.Json.JsonElement data)
+    {
+        var id = data.GetProperty("Id").GetInt32();
+        CustomMarkerState.RemoveCustomMarker(id);
+
+        if (mapView != null)
+        {
+            await mapView.RemoveCustomMarkerAsync(id);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleCreateCustomMarkerFromMenu()
+    {
+        showMapActionMenu = false;
+        await ShowCreateCustomMarkerDialog(mapActionMapId, mapActionCoordX, mapActionCoordY, mapActionX, mapActionY);
+    }
+
+    private async Task HandleCreatePingFromMenu()
+    {
+        showMapActionMenu = false;
+        await JsCreatePing(mapActionMapId, mapActionCoordX, mapActionCoordY, mapActionX, mapActionY);
+    }
+
+    /// <summary>
+    /// Creates a ping at the specified location (called from JavaScript Alt+M shortcut or context menu)
+    /// </summary>
+    [JSInvokable]
+    public async Task JsCreatePing(int mapId, int coordX, int coordY, int x, int y)
+    {
+        try
+        {
+            var client = HttpClientFactory.CreateClient("API");
+
+            var pingDto = new
+            {
+                mapId,
+                coordX,
+                coordY,
+                x,
+                y
+            };
+
+            var response = await client.PostAsJsonAsync("/map/api/v1/pings", pingDto, CamelCaseJsonOptions);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Logger.LogInformation("Ping created at ({CoordX},{CoordY},{X},{Y})", coordX, coordY, x, y);
+                // Ping will be added via SSE event
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                Snackbar.Add("You have reached the maximum of 5 active pings. Please wait for existing pings to expire.", Severity.Warning);
+            }
+            else
+            {
+                Logger.LogWarning("Failed to create ping: {StatusCode}", response.StatusCode);
+                Snackbar.Add("Failed to create ping", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error creating ping");
+            Snackbar.Add("Error creating ping", Severity.Error);
+        }
+    }
+
+    /// <summary>
+    /// Handles ping created events from SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnPingCreated(PingEventModel pingData)
+    {
+        try
+        {
+            Console.WriteLine($"[Map.razor.cs] OnPingCreated called - Id:{pingData.Id}, MapId:{pingData.MapId}, CurrentMapId:{MapNavigation.CurrentMapId}");
+
+            // Only process pings for the currently viewed map
+            if (pingData.MapId != MapNavigation.CurrentMapId)
+            {
+                Console.WriteLine($"[Map.razor.cs] Ping is for different map (ping:{pingData.MapId}, current:{MapNavigation.CurrentMapId}), ignoring");
+                return;
+            }
+
+            Console.WriteLine($"[Map.razor.cs] Ping is for current map, coords:({pingData.CoordX},{pingData.CoordY},{pingData.X},{pingData.Y})");
+
+            // Forward to JavaScript ping manager
+            if (mapView != null)
+            {
+                Console.WriteLine("[Map.razor.cs] mapView is not null, getting leaflet module");
+                leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+                Console.WriteLine("[Map.razor.cs] Calling onPingCreated in JS");
+                await leafletModule.InvokeVoidAsync("onPingCreated", pingData);
+                Console.WriteLine("[Map.razor.cs] onPingCreated completed");
+
+                // Show the "Go to Ping" button
+                hasActivePing = true;
+                await InvokeAsync(StateHasChanged);
+            }
+            else
+            {
+                Console.WriteLine("[Map.razor.cs] ERROR: mapView is null!");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Map.razor.cs] ERROR in OnPingCreated: {ex.Message}");
+            Logger.LogError(ex, "Error handling ping created event");
+        }
+    }
+
+    /// <summary>
+    /// Handles ping deleted events from SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnPingDeleted(PingDeleteEventModel deleteData)
+    {
+        try
+        {
+            Console.WriteLine($"[Map.razor.cs] OnPingDeleted called - Id:{deleteData.Id}");
+
+            // Forward to JavaScript ping manager
+            if (mapView != null)
+            {
+                leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+                await leafletModule.InvokeVoidAsync("onPingDeleted", deleteData.Id);
+
+                // Check if there are still active pings
+                var activePingCount = await leafletModule.InvokeAsync<int>("getActivePingCount");
+                hasActivePing = activePingCount > 0;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error handling ping deleted event");
+        }
+    }
+
+    #endregion
+
+    #region IBrowserViewportObserver Implementation
+
+    Guid IBrowserViewportObserver.Id { get; } = Guid.NewGuid();
+
+    ResizeOptions IBrowserViewportObserver.ResizeOptions { get; } = new()
+    {
+        ReportRate = 250,
+        NotifyOnBreakpointOnly = true
+    };
+
+    Task IBrowserViewportObserver.NotifyBrowserViewportChangeAsync(BrowserViewportEventArgs browserViewportEventArgs)
+    {
+        var breakpoint = browserViewportEventArgs.Breakpoint;
+        var shouldBeOpen = breakpoint >= Breakpoint.Lg;
+
+        if (isSidebarOpen != shouldBeOpen)
+        {
+            isSidebarOpen = shouldBeOpen;
+            Logger.LogInformation("Viewport breakpoint changed to {Breakpoint}, sidebar now {State}",
+                breakpoint, isSidebarOpen ? "open" : "closed");
+            return InvokeAsync(StateHasChanged);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    #endregion
+}

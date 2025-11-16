@@ -1,0 +1,170 @@
+@using HnHMapperServer.Core.Enums
+@using HnHMapperServer.Core.Extensions
+@using HnHMapperServer.Core.DTOs
+@using HnHMapperServer.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">
+            Assign User to Tenant
+        </MudText>
+
+        <MudText Typo="Typo.body2" Class="mb-4">
+            User: <strong>@User?.Username</strong>
+        </MudText>
+
+        <MudStack Spacing="3">
+            <MudSelect @bind-Value="_selectedTenantId"
+                       Label="Tenant"
+                       Required="true"
+                       Variant="Variant.Outlined"
+                       HelperText="Select the tenant to assign this user to">
+                @foreach (var tenant in Tenants)
+                {
+                    <MudSelectItem Value="@tenant.Id">@tenant.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudSelect @bind-Value="_selectedRole"
+                       Label="Role"
+                       Required="true"
+                       Variant="Variant.Outlined"
+                       HelperText="User's role within the tenant">
+                <MudSelectItem Value="@("TenantAdmin")">Tenant Admin</MudSelectItem>
+                <MudSelectItem Value="@("TenantUser")">Tenant User</MudSelectItem>
+            </MudSelect>
+
+            <MudText Typo="Typo.subtitle2" Class="mt-2">Permissions:</MudText>
+
+            <MudStack Spacing="1">
+                <MudCheckBox @bind-Value="_mapPermission"
+                             Label="Map - View maps"
+                             Color="Color.Primary" />
+                <MudCheckBox @bind-Value="_markersPermission"
+                             Label="Markers - View and create markers"
+                             Color="Color.Primary" />
+                <MudCheckBox @bind-Value="_pointerPermission"
+                             Label="Pointer - View character positions"
+                             Color="Color.Primary" />
+                <MudCheckBox @bind-Value="_uploadPermission"
+                             Label="Upload - Upload map data via game client"
+                             Color="Color.Primary" />
+                <MudCheckBox @bind-Value="_writerPermission"
+                             Label="Writer - Edit and delete content"
+                             Color="Color.Primary" />
+            </MudStack>
+
+            @if (!string.IsNullOrEmpty(_errorMessage))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_errorMessage</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Variant="Variant.Text">Cancel</MudButton>
+        <MudButton OnClick="Submit"
+                   Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="@(_isSubmitting || string.IsNullOrEmpty(_selectedTenantId) || string.IsNullOrEmpty(_selectedRole))">
+            @if (_isSubmitting)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                <span>Assigning...</span>
+            }
+            else
+            {
+                <span>Assign User</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    public IMudDialogInstance? MudDialog { get; set; }
+
+    [Parameter]
+    public UnassignedUserDto? User { get; set; }
+
+    [Parameter]
+    public List<TenantListDto> Tenants { get; set; } = new();
+
+    private string _selectedTenantId = string.Empty;
+    private string _selectedRole = "TenantUser";
+    private bool _mapPermission = true; // Default to map permission
+    private bool _markersPermission;
+    private bool _pointerPermission;
+    private bool _uploadPermission;
+    private bool _writerPermission;
+    private bool _isSubmitting;
+    private string _errorMessage = string.Empty;
+
+    private void Cancel()
+    {
+        MudDialog?.Cancel();
+    }
+
+    private async Task Submit()
+    {
+        if (User == null || string.IsNullOrEmpty(_selectedTenantId) || string.IsNullOrEmpty(_selectedRole))
+            return;
+
+        _errorMessage = string.Empty;
+        _isSubmitting = true;
+
+        try
+        {
+            var permissions = new List<string>();
+            if (_mapPermission) permissions.Add(Permission.Map.ToClaimValue());
+            if (_markersPermission) permissions.Add(Permission.Markers.ToClaimValue());
+            if (_pointerPermission) permissions.Add(Permission.Pointer.ToClaimValue());
+            if (_uploadPermission) permissions.Add(Permission.Upload.ToClaimValue());
+            if (_writerPermission) permissions.Add(Permission.Writer.ToClaimValue());
+
+            var apiClient = HttpClientFactory.CreateClient("API");
+            var assignData = new
+            {
+                TenantId = _selectedTenantId,
+                Role = _selectedRole,
+                Permissions = permissions
+            };
+
+            var response = await apiClient.PostAsJsonAsync($"/api/superadmin/users/{User.UserId}/assign-tenant", assignData);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"User {User.Username} assigned to tenant successfully", Severity.Success);
+                MudDialog?.Close(DialogResult.Ok(true));
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                try
+                {
+                    var errorObj = System.Text.Json.JsonSerializer.Deserialize<ErrorResponse>(errorContent,
+                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    _errorMessage = errorObj?.Error ?? "Failed to assign user";
+                }
+                catch
+                {
+                    _errorMessage = $"Failed to assign user: {response.StatusCode}";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private class ErrorResponse
+    {
+        public string Error { get; set; } = string.Empty;
+    }
+}

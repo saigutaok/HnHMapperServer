@@ -1,0 +1,227 @@
+@using HnHMapperServer.Web.Models
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudText Typo="Typo.h5" Class="mb-4">System Operations</MudText>
+
+@if (dbStats != null)
+{
+    <MudPaper Elevation="2" Class="pa-4 mb-4">
+        <MudText Typo="Typo.h6" Class="mb-3">
+            <MudIcon Icon="@Icons.Material.Filled.Analytics" Class="me-2" />
+            Database Statistics
+        </MudText>
+        <MudSimpleTable Dense="true" Hover="true" Style="max-width: 400px">
+            <tbody>
+                <tr><td><strong>Users:</strong></td><td>@dbStats.Users</td></tr>
+                <tr><td><strong>Sessions:</strong></td><td>@dbStats.Sessions</td></tr>
+                <tr><td><strong>Grids:</strong></td><td>@dbStats.Grids</td></tr>
+                <tr><td><strong>Markers:</strong></td><td>@dbStats.Markers</td></tr>
+                <tr><td><strong>Tiles:</strong></td><td>@dbStats.Tiles</td></tr>
+                <tr><td><strong>Maps:</strong></td><td>@dbStats.Maps</td></tr>
+                <tr><td><strong>Tokens:</strong></td><td>@dbStats.Tokens</td></tr>
+                <tr><td><strong>Config:</strong></td><td>@dbStats.Config</td></tr>
+            </tbody>
+        </MudSimpleTable>
+    </MudPaper>
+}
+
+<MudStack Spacing="4">
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudText Typo="Typo.h6" Class="mb-3">
+            <MudIcon Icon="@Icons.Material.Filled.Storage" Class="me-2" />
+            Database Operations
+        </MudText>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Info" StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="BackupDatabase" Disabled="@isProcessing">
+                Backup Database
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.DeleteForever"
+                       OnClick="ShowWipeConfirmation" Disabled="@isProcessing">
+                Wipe Data
+            </MudButton>
+        </MudStack>
+    </MudPaper>
+
+    <MudPaper Elevation="2" Class="pa-4">
+        <MudText Typo="Typo.h6" Class="mb-3">
+            <MudIcon Icon="@Icons.Material.Filled.Image" Class="me-2" />
+            Map Operations
+        </MudText>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
+                       OnClick="RebuildTiles" Disabled="@isProcessing">
+                Rebuild Zoom Tiles
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Delete"
+                       OnClick="ClearCache" Disabled="@isProcessing">
+                Clear Tile Cache
+            </MudButton>
+        </MudStack>
+    </MudPaper>
+</MudStack>
+
+@code {
+    private DatabaseStatsDto? dbStats;
+    private bool isProcessing = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDatabaseStats();
+    }
+
+    private async Task LoadDatabaseStats()
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/admin/system/stats");
+
+            if (response.IsSuccessStatusCode)
+            {
+                dbStats = await response.Content.ReadFromJsonAsync<DatabaseStatsDto>();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                Snackbar.Add("You are not authorized to view system statistics. Please ensure you're logged in as an admin.", Severity.Error);
+            }
+            else
+            {
+                Snackbar.Add($"Failed to load database stats: {response.StatusCode}", Severity.Error);
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Network error loading database stats: {ex.Message}", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load database stats: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task BackupDatabase()
+    {
+        isProcessing = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.PostAsync("/admin/system/backup", null);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<BackupResultDto>();
+                if (result != null)
+                {
+                    Snackbar.Add($"Database backed up successfully to: {result.BackupPath}", Severity.Success);
+                }
+            }
+            else
+            {
+                Snackbar.Add("Database backup failed", Severity.Error);
+            }
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+
+    private async Task ShowWipeConfirmation()
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Wipe Database",
+            "Are you sure you want to wipe all data? This will delete all grids, markers, tiles, maps, characters, sessions, and configuration. User accounts will be preserved. This action cannot be undone!",
+            yesText: "Wipe Everything",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            await WipeDatabase();
+        }
+    }
+
+    private async Task WipeDatabase()
+    {
+        isProcessing = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.PostAsync("/admin/system/wipe", null);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<SystemOperationResultDto>();
+                if (result != null)
+                {
+                    Snackbar.Add(result.Message, Severity.Success);
+                    await LoadDatabaseStats();
+                }
+            }
+            else
+            {
+                Snackbar.Add("Database wipe failed", Severity.Error);
+            }
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+
+    private async Task RebuildTiles()
+    {
+        isProcessing = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.PostAsync("/admin/system/rebuild-tiles", null);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<SystemOperationResultDto>();
+                if (result != null)
+                {
+                    Snackbar.Add(result.Message, Severity.Info);
+                }
+            }
+            else
+            {
+                Snackbar.Add("Tile rebuild failed", Severity.Error);
+            }
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+
+    private async Task ClearCache()
+    {
+        isProcessing = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.PostAsync("/admin/system/clear-cache", null);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<SystemOperationResultDto>();
+                if (result != null)
+                {
+                    Snackbar.Add(result.Message, Severity.Success);
+                }
+            }
+            else
+            {
+                Snackbar.Add("Clear cache failed", Severity.Error);
+            }
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+    }
+}

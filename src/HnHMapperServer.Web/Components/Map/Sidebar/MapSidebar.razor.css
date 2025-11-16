@@ -1,0 +1,78 @@
+/* Drawer header with mode selection buttons */
+::deep .drawer-header {
+    padding: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    background: transparent; /* Let glassmorphism show through */
+}
+
+/* Mode selection buttons (Players, Markers, Layers, Maps) */
+::deep .mode-button {
+    min-height: 80px;
+    text-transform: none;
+    transition: all 0.2s ease-in-out;
+}
+
+::deep .mode-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* Drawer content area with scrolling and padding */
+.drawer-content {
+    padding: 16px;
+    overflow-y: auto;
+    overflow-x: visible; /* Allow popovers to overflow horizontally */
+    height: calc(100vh - 200px); /* Account for drawer header with grid */
+    position: relative; /* Create positioning context for popovers */
+}
+
+/* Selected item in player/marker lists */
+::deep .mud-selected-item {
+    background-color: rgba(var(--mud-palette-success-rgb), 0.08) !important;
+    border-left: 3px solid var(--mud-palette-success);
+}
+
+/* Lighten the drawer overlay for better map visibility on mobile/tablet */
+::deep .mud-drawer-overlay,
+::deep .mud-overlay,
+::deep .mud-overlay-dark {
+    background-color: rgba(0,0,0,0.25) !important; /* Lighter than default (~0.5-0.6) */
+}
+
+/* Close button for mobile - hidden by default */
+.mobile-close-button {
+    display: none;
+}
+
+/* Phone-specific adjustments (screens ≤600px) */
+@media (max-width: 600px) {
+    /* Make drawer full-width on phones */
+    ::deep .map-sidebar.mud-drawer {
+        width: 100vw !important;
+        max-width: 100vw !important;
+    }
+    
+    /* Show close button on phones */
+    .mobile-close-button {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 8px;
+    }
+    
+    /* Compact mode buttons to save vertical space */
+    ::deep .mode-button {
+        min-height: 56px;
+    }
+    
+    /* Adjust drawer content height for compacted header + close button */
+    .drawer-content {
+        height: calc(100vh - 200px); /* Account for close button + smaller mode buttons */
+    }
+}
+
+/* Tablet-specific adjustments (601px - 960px) */
+@media (min-width: 601px) and (max-width: 960px) {
+    /* On tablets, keep the responsive width (85vw max) */
+    /* Close button stays hidden on tablets */
+}
+

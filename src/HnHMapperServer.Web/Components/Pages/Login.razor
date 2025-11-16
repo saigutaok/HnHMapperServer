@@ -1,0 +1,291 @@
+@page "/login"
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@rendermode InteractiveServer
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Services
+@inject NavigationManager NavigationManager
+@inject IConfiguration Configuration
+@inject IHttpClientFactory HttpClientFactory
+@inject ITenantService TenantService
+@inject TenantContextService TenantContext
+@inject ISnackbar Snackbar
+@inject ILogger<Login> Logger
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Login - HnH Mapper</PageTitle>
+
+<div class="auth-page">
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-16">
+    <MudCard Class="pa-6 glass-morphism">
+        <MudText Typo="Typo.h5" Align="Align.Center" Class="mb-4">
+            <MudIcon Icon="@Icons.Material.Filled.Lock" Class="me-2" />
+            HnH Mapper Login
+        </MudText>
+
+        @if (_registered)
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-3 glass-morphism" Dense="true">
+                Account created successfully! You can now log in after admin approval.
+            </MudAlert>
+        }
+
+        @if (!string.IsNullOrEmpty(_errorMessage))
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3 glass-morphism">
+                @_errorMessage
+            </MudAlert>
+        }
+
+        <MudForm @ref="_form">
+            <MudStack Spacing="3">
+                <MudTextField @bind-Value="_username"
+                              Label="Username"
+                              Variant="Variant.Outlined"
+                              Required="true"
+                              AutoFocus="true"
+                              Disabled="@_isLoggingIn"
+                              OnKeyPress="@HandleKeyPress" />
+
+                <MudTextField @bind-Value="_password"
+                              Label="Password"
+                              Variant="Variant.Outlined"
+                              InputType="InputType.Password"
+                              Required="true"
+                              Disabled="@_isLoggingIn"
+                              OnKeyPress="@HandleKeyPress" />
+
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           FullWidth="true"
+                           OnClick="HandleLogin"
+                           Disabled="@_isLoggingIn"
+                           Size="Size.Large">
+                    @if (_isLoggingIn)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                        <span>Logging in...</span>
+                    }
+                    else
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Login" Class="me-2" />
+                        <span>Login</span>
+                    }
+                </MudButton>
+            </MudStack>
+        </MudForm>
+
+        @if (_selfRegistrationEnabled)
+        {
+            <MudDivider Class="my-4" />
+            <MudText Align="Align.Center">
+                Have an invitation code?
+                <MudLink Href="/register" Color="Color.Primary">Register here</MudLink>
+            </MudText>
+        }
+    </MudCard>
+</MudContainer>
+</div>
+
+@code {
+    [CascadingParameter]
+    public HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromQuery(Name = "registered")]
+    public string? Registered { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    private MudForm? _form;
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _errorMessage = string.Empty;
+    private bool _isLoggingIn;
+    private bool _registered;
+    private bool _selfRegistrationEnabled = true;
+    private bool _hasCheckedPendingLogin = false;
+
+    protected override void OnInitialized()
+    {
+        // Check if user is already authenticated (without pending login)
+        if (HttpContext?.User?.Identity?.IsAuthenticated == true && !_hasCheckedPendingLogin)
+        {
+            // Will be handled in OnAfterRenderAsync
+            return;
+        }
+
+        // Check if self-registration is enabled (default true if not set)
+        _selfRegistrationEnabled = Configuration.GetValue<bool?>("SelfRegistration:Enabled") ?? true;
+
+        // Check for query parameters
+        _registered = Registered == "1";
+        if (Error == "1")
+        {
+            _errorMessage = "Invalid username or password";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _hasCheckedPendingLogin)
+            return;
+
+        _hasCheckedPendingLogin = true;
+
+        // Check if we just logged in and have pending tenants in sessionStorage
+        try
+        {
+            var pendingTenantsJson = await JSRuntime.InvokeAsync<string>("sessionStorage.getItem", "pendingTenants");
+            if (!string.IsNullOrEmpty(pendingTenantsJson))
+            {
+                // Clear sessionStorage
+                await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "pendingTenants");
+                await JSRuntime.InvokeVoidAsync("sessionStorage.removeItem", "pendingUsername");
+
+                // Deserialize tenants and complete login flow
+                var tenants = System.Text.Json.JsonSerializer.Deserialize<List<TenantDto>>(pendingTenantsJson);
+                if (tenants != null && tenants.Count > 0)
+                {
+                    TenantContext.ClearCache();
+
+                    if (tenants.Count == 1)
+                    {
+                        // Auto-select the only tenant
+                        var tenant = tenants[0];
+                        var selectSuccess = await TenantService.SelectTenantAsync(tenant.Id);
+
+                        if (selectSuccess)
+                        {
+                            TenantContext.SetCurrentTenant(tenant);
+                            NavigationManager.NavigateTo("/", forceLoad: true);
+                        }
+                        else
+                        {
+                            Logger.LogError("Failed to select tenant {TenantId}", tenant.Id);
+                            NavigationManager.NavigateTo("/login?error=1", forceLoad: true);
+                        }
+                    }
+                    else
+                    {
+                        // Multiple tenants - navigate to selector
+                        NavigationManager.NavigateTo("/tenant/select", forceLoad: true);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error completing login after authentication");
+        }
+    }
+
+    private async Task HandleKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await HandleLogin();
+        }
+    }
+
+    private async Task HandleLogin()
+    {
+        if (string.IsNullOrWhiteSpace(_username) || string.IsNullOrWhiteSpace(_password))
+        {
+            _errorMessage = "Please enter username and password";
+            return;
+        }
+
+        _errorMessage = string.Empty;
+        _isLoggingIn = true;
+
+        try
+        {
+            // Call the API to validate credentials and get tenant list
+            var apiClient = HttpClientFactory.CreateClient("API");
+            var loginData = new { Username = _username, Password = _password };
+            var apiResponse = await apiClient.PostAsJsonAsync("/api/auth/login", loginData);
+
+            if (!apiResponse.IsSuccessStatusCode)
+            {
+                Logger.LogError("API login failed: Status={Status}", apiResponse.StatusCode);
+
+                _errorMessage = apiResponse.StatusCode switch
+                {
+                    System.Net.HttpStatusCode.Unauthorized => "Invalid username or password",
+                    System.Net.HttpStatusCode.Forbidden => "Your account is pending approval or has been disabled",
+                    _ => $"Login failed: {apiResponse.StatusCode}"
+                };
+                return;
+            }
+
+            // Parse tenant list from API
+            var loginResponse = await apiResponse.Content.ReadFromJsonAsync<LoginResponse>(
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            // Check if user is awaiting tenant assignment
+            if (loginResponse?.HasNoTenant == true)
+            {
+                Logger.LogInformation("User {Username} is awaiting tenant assignment", _username);
+                NavigationManager.NavigateTo("/pending-assignment");
+                return;
+            }
+
+            if (loginResponse?.Tenants == null || loginResponse.Tenants.Count == 0)
+            {
+                _errorMessage = "Your account does not have access to any organizations. Please contact an administrator.";
+                Logger.LogWarning("User {Username} has no tenant access", _username);
+                return;
+            }
+
+            // Store tenant info in sessionStorage before form submission
+            // After /api/login sets the cookie and reloads, we'll complete tenant selection
+            var tenantsJson = System.Text.Json.JsonSerializer.Serialize(loginResponse.Tenants);
+            await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "pendingTenants", tenantsJson);
+            await JSRuntime.InvokeVoidAsync("sessionStorage.setItem", "pendingUsername", _username);
+
+            // Submit form to /api/login using JavaScript to establish authentication cookie
+            await JSRuntime.InvokeVoidAsync("eval", $@"
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/api/login';
+
+                const userInput = document.createElement('input');
+                userInput.type = 'hidden';
+                userInput.name = 'user';
+                userInput.value = {System.Text.Json.JsonSerializer.Serialize(_username)};
+                form.appendChild(userInput);
+
+                const passInput = document.createElement('input');
+                passInput.type = 'hidden';
+                passInput.name = 'pass';
+                passInput.value = {System.Text.Json.JsonSerializer.Serialize(_password)};
+                form.appendChild(passInput);
+
+                document.body.appendChild(form);
+                form.submit();
+            ");
+        }
+        catch (HttpRequestException ex)
+        {
+            Logger.LogError(ex, "HTTP request exception during login");
+            _errorMessage = $"Connection error: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Unexpected exception during login");
+            _errorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            _isLoggingIn = false;
+        }
+    }
+
+    private class LoginResponse
+    {
+        public string? UserId { get; set; }
+        public string? Username { get; set; }
+        public List<TenantDto> Tenants { get; set; } = new();
+        public bool HasNoTenant { get; set; }
+    }
+}

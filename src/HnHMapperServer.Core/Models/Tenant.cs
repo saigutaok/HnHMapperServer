@@ -1,0 +1,37 @@
+namespace HnHMapperServer.Core.Models;
+
+/// <summary>
+/// Represents a tenant (organization) in the multi-tenant system
+/// </summary>
+public sealed class TenantEntity
+{
+    /// <summary>
+    /// Tenant identifier (format: icon1-icon2-number, e.g., "warrior-shield-42")
+    /// </summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Display name (same as Id)
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Storage quota in megabytes
+    /// </summary>
+    public int StorageQuotaMB { get; set; } = 1024;
+
+    /// <summary>
+    /// Current storage usage in megabytes
+    /// </summary>
+    public double CurrentStorageMB { get; set; } = 0;
+
+    /// <summary>
+    /// ISO 8601 UTC timestamp when tenant was created
+    /// </summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Whether the tenant is active (1) or suspended (0)
+    /// </summary>
+    public bool IsActive { get; set; } = true;
+}

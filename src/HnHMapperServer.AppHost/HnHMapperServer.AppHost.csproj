@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Sdk Name="Aspire.AppHost.Sdk" Version="9.5.1" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>70a6019e-6529-4976-9923-3309c986ca60</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.5.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\HnHMapperServer.Api\HnHMapperServer.Api.csproj" />
+    <ProjectReference Include="..\HnHMapperServer.Web\HnHMapperServer.Web.csproj" />
+    <ProjectReference Include="..\HnHMapperServer.ServiceDefaults\HnHMapperServer.ServiceDefaults.csproj" IsAspireProjectResource="false" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,185 @@
+@using HnHMapperServer.Web.Models
+@using MudBlazor
+
+<!-- Maps panel with map controls and selection -->
+<MudText Typo="Typo.h6" Class="mb-3">Map Controls</MudText>
+
+<MudStack Spacing="3">
+    <!-- Map Selector (inline dropdown to avoid popover issues) -->
+    <div class="select-wrapper">
+        <MudText Typo="Typo.body2" Class="mb-2">Current Map</MudText>
+        <MudButton Variant="Variant.Outlined"
+                   FullWidth="true"
+                   EndIcon="@Icons.Material.Filled.ArrowDropDown"
+                   Style="justify-content: space-between; text-transform: none;"
+                   OnClick="@(()=> showMapDropdown = !showMapDropdown)">
+            @(SelectedMap?.MapInfo.Name ?? "Select Map")
+        </MudButton>
+        @if (showMapDropdown)
+        {
+            <div class="select-dropdown">
+                <MudPaper Elevation="8">
+                    <MudList T="string" Dense="true">
+                        @foreach (var map in Maps)
+                        {
+                            <MudListItem T="string" OnClick="@(()=> SelectMapInternal(map))">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    @if (map.MapInfo.IsMainMap)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" Color="Color.Primary" />
+                                    }
+                                    <MudText>@map.MapInfo.Name</MudText>
+                                </MudStack>
+                            </MudListItem>
+                        }
+                    </MudList>
+                </MudPaper>
+            </div>
+        }
+    </div>
+
+    <!-- Overlay Map Selector (inline dropdown) -->
+    <div class="select-wrapper">
+        <MudText Typo="Typo.body2" Class="mb-2">Overlay Map</MudText>
+        <MudButton Variant="Variant.Outlined"
+                   FullWidth="true"
+                   EndIcon="@Icons.Material.Filled.ArrowDropDown"
+                   Style="justify-content: space-between; text-transform: none;"
+                   OnClick="@(()=> showOverlayDropdown = !showOverlayDropdown)">
+            @(OverlayMap?.MapInfo.Name ?? "None")
+        </MudButton>
+        @if (showOverlayDropdown)
+        {
+            <div class="select-dropdown">
+                <MudPaper Elevation="8">
+                    <MudList T="string" Dense="true">
+                        <MudListItem T="string" OnClick="@(()=> SelectOverlayInternal(null))">None</MudListItem>
+                        @foreach (var map in Maps)
+                        {
+                            <MudListItem T="string" OnClick="@(()=> SelectOverlayInternal(map))">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    @if (map.MapInfo.IsMainMap)
+                                    {
+                                        <MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" Color="Color.Primary" />
+                                    }
+                                    <MudText>@map.MapInfo.Name</MudText>
+                                </MudStack>
+                            </MudListItem>
+                        }
+                    </MudList>
+                </MudPaper>
+            </div>
+        }
+    </div>
+
+    <MudDivider />
+
+    <!-- Zoom Controls -->
+    <div>
+        <MudText Typo="Typo.body2" Class="mb-2">Zoom Level: @State.Zoom</MudText>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Outlined" 
+                       StartIcon="@Icons.Material.Filled.ZoomOut"
+                       OnClick="@(() => OnZoomOut.InvokeAsync())"
+                       FullWidth="true">
+                Zoom Out
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" 
+                       StartIcon="@Icons.Material.Filled.ZoomIn"
+                       OnClick="@(() => OnZoomIn.InvokeAsync())"
+                       FullWidth="true">
+                Zoom In
+            </MudButton>
+        </MudStack>
+        <MudButton Variant="Variant.Outlined" 
+                   StartIcon="@Icons.Material.Filled.Home"
+                   OnClick="@(() => OnResetView.InvokeAsync())"
+                   FullWidth="true"
+                   Class="mt-2">
+            Reset View
+        </MudButton>
+    </div>
+
+    <MudDivider />
+
+    <!-- Grid Coordinates Toggle -->
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+            <MudIcon Icon="@Icons.Material.Filled.GridOn" Size="Size.Medium" />
+            <MudText Typo="Typo.body1">Grid Coordinates</MudText>
+        </MudStack>
+        <MudSwitch Value="@State.ShowGridCoordinates" 
+                   ValueChanged="@((bool value) => OnToggleGridCoordinates.InvokeAsync(value))" 
+                   Color="Color.Primary" />
+    </MudStack>
+</MudStack>
+
+@code {
+    /// <summary>
+    /// Current map state with zoom level and grid coordinates visibility
+    /// </summary>
+    [Parameter] public MapState State { get; set; } = new();
+    
+    /// <summary>
+    /// List of all available maps
+    /// </summary>
+    [Parameter] public IReadOnlyList<MapInfoModel> Maps { get; set; } = Array.Empty<MapInfoModel>();
+    
+    /// <summary>
+    /// Currently selected map
+    /// </summary>
+    [Parameter] public MapInfoModel? SelectedMap { get; set; }
+    
+    /// <summary>
+    /// Currently selected overlay map (null if no overlay)
+    /// </summary>
+    [Parameter] public MapInfoModel? OverlayMap { get; set; }
+    
+    /// <summary>
+    /// Event callback when map selection changes
+    /// </summary>
+    [Parameter] public EventCallback<MapInfoModel?> OnMapSelected { get; set; }
+    
+    /// <summary>
+    /// Event callback when overlay map selection changes
+    /// </summary>
+    [Parameter] public EventCallback<MapInfoModel?> OnOverlayMapSelected { get; set; }
+    
+    /// <summary>
+    /// Event callback when zoom in is requested
+    /// </summary>
+    [Parameter] public EventCallback OnZoomIn { get; set; }
+    
+    /// <summary>
+    /// Event callback when zoom out is requested
+    /// </summary>
+    [Parameter] public EventCallback OnZoomOut { get; set; }
+    
+    /// <summary>
+    /// Event callback when reset view is requested
+    /// </summary>
+    [Parameter] public EventCallback OnResetView { get; set; }
+    
+    /// <summary>
+    /// Event callback when grid coordinates visibility changes
+    /// </summary>
+    [Parameter] public EventCallback<bool> OnToggleGridCoordinates { get; set; }
+
+    // Inline dropdown state toggles
+    private bool showMapDropdown = false;
+    private bool showOverlayDropdown = false;
+
+    private async Task SelectMapInternal(MapInfoModel map)
+    {
+        showMapDropdown = false;
+        await OnMapSelected.InvokeAsync(map);
+    }
+
+    private async Task SelectOverlayInternal(MapInfoModel? map)
+    {
+        showOverlayDropdown = false;
+        await OnOverlayMapSelected.InvokeAsync(map);
+    }
+}
+
+

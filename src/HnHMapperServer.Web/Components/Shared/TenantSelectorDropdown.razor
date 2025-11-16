@@ -1,0 +1,112 @@
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Services
+@inject TenantContextService TenantContext
+@inject ITenantService TenantService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+@if (ShowSelector && _tenants.Count > 1)
+{
+    <MudMenu Icon="@Icons.Material.Filled.Business"
+             Color="Color.Inherit"
+             Label="@CurrentTenantName"
+             Dense="true"
+             Class="ml-2">
+        <ChildContent>
+            @foreach (var tenant in _tenants)
+            {
+                <MudMenuItem OnClick="@(() => SelectTenant(tenant))">
+                    <div class="d-flex align-items-center">
+                        <MudIcon Icon="@GetTenantIcon(tenant.Id)" Class="mr-2" Size="Size.Small" />
+                        <div>
+                            <div>@tenant.Name</div>
+                            <div class="text-caption text-muted">@tenant.Role</div>
+                        </div>
+                        @if (tenant.Id == TenantContext.CurrentTenant?.Id)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.Check" Class="ml-2" Color="Color.Success" Size="Size.Small" />
+                        }
+                    </div>
+                </MudMenuItem>
+            }
+        </ChildContent>
+    </MudMenu>
+}
+
+@code {
+    private List<TenantDto> _tenants = new();
+    private bool _loading = true;
+
+    [Parameter]
+    public bool ShowSelector { get; set; } = true;
+
+    private string CurrentTenantName => TenantContext.CurrentTenant?.Name ?? "Select Tenant";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _tenants = await TenantContext.GetTenantsAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading tenants: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectTenant(TenantDto tenant)
+    {
+        if (tenant.Id == TenantContext.CurrentTenant?.Id)
+        {
+            // Already on this tenant
+            return;
+        }
+
+        try
+        {
+            var success = await TenantService.SelectTenantAsync(tenant.Id);
+            if (success)
+            {
+                TenantContext.SetCurrentTenant(tenant);
+                Snackbar.Add($"Switched to {tenant.Name}", Severity.Success);
+
+                // Reload the page to refresh all components with new tenant context
+                Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+            }
+            else
+            {
+                Snackbar.Add("Failed to switch tenant", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error switching tenant: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string GetTenantIcon(string tenantId)
+    {
+        // Extract first icon word from tenant ID (e.g., "warrior" from "warrior-shield-42")
+        var parts = tenantId.Split('-');
+        if (parts.Length == 0) return Icons.Material.Filled.Business;
+
+        return parts[0].ToLower() switch
+        {
+            "warrior" => Icons.Material.Filled.Shield,
+            "dragon" => "🐉",
+            "wizard" => "🧙",
+            "castle" => "🏰",
+            "sword" => "⚔️",
+            "shield" => Icons.Material.Filled.Shield,
+            "crown" => "👑",
+            "hammer" => "🔨",
+            "bow" => "🏹",
+            "staff" => "🪄",
+            _ => Icons.Material.Filled.Business
+        };
+    }
+}

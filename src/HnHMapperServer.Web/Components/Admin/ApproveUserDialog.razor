@@ -1,0 +1,96 @@
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Core.Enums
+@using HnHMapperServer.Core.Extensions
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-4">Approve User: @User?.Username</MudText>
+
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Select the permissions to grant this user:
+        </MudText>
+
+        <MudStack Spacing="2">
+            <MudCheckBox @bind-Value="_mapPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Map</strong> - View maps in the frontend
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_markersPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Markers</strong> - See markers on the map
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_pointerPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Pointer</strong> - See character positions
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_uploadPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Upload</strong> - Upload tiles via game client
+                </MudText>
+            </MudCheckBox>
+
+            <MudCheckBox @bind-Value="_writerPermission" Color="Color.Primary">
+                <MudText>
+                    <strong>Writer</strong> - Edit/delete tiles and markers
+                </MudText>
+            </MudCheckBox>
+        </MudStack>
+
+        @if (_selectedPermissions.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                At least one permission must be selected.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Approve"
+                   Disabled="@(_selectedPermissions.Count == 0)">
+            Approve User
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance? MudDialog { get; set; }
+    [Parameter] public PendingUserDto? User { get; set; }
+
+    // Permission checkboxes
+    private bool _mapPermission = true;      // Default checked
+    private bool _markersPermission = true;  // Default checked
+    private bool _pointerPermission = false;
+    private bool _uploadPermission = false;
+    private bool _writerPermission = false;
+
+    private List<string> _selectedPermissions => new List<string>
+    {
+        _mapPermission ? Permission.Map.ToClaimValue() : null,
+        _markersPermission ? Permission.Markers.ToClaimValue() : null,
+        _pointerPermission ? Permission.Pointer.ToClaimValue() : null,
+        _uploadPermission ? Permission.Upload.ToClaimValue() : null,
+        _writerPermission ? Permission.Writer.ToClaimValue() : null
+    }.Where(p => p != null).Select(p => p!).ToList();
+
+    void Cancel()
+    {
+        MudDialog?.Cancel();
+    }
+
+    void Approve()
+    {
+        if (_selectedPermissions.Count == 0)
+            return;
+
+        MudDialog?.Close(DialogResult.Ok(_selectedPermissions));
+    }
+}

@@ -1,0 +1,356 @@
+@using HnHMapperServer.Web.Services
+@using HnHMapperServer.Core.DTOs
+@using TenantDto = HnHMapperServer.Core.DTOs.TenantDto
+@using Microsoft.AspNetCore.Components.Authorization
+@inject TenantContextService TenantContext
+@inject IHttpClientFactory HttpClientFactory
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ISnackbar Snackbar
+@inject ILogger<TenantSettings> Logger
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="4">
+        <MudText Typo="Typo.h5">
+            <MudIcon Icon="@Icons.Material.Filled.Settings" Class="me-2" />
+            Tenant Settings
+        </MudText>
+
+        @if (_isLoading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_tenantSettings != null)
+        {
+            @* Tenant Information *@
+            <MudPaper Elevation="2" Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-3">Organization Information</MudText>
+                <MudGrid>
+                    <MudItem xs="12" md="6">
+                        <MudTextField Label="Tenant ID"
+                                     Value="@_tenantSettings.Id"
+                                     ReadOnly="true"
+                                     Variant="Variant.Outlined" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudTextField Label="Organization Name"
+                                     @bind-Value="@_tenantSettings.Name"
+                                     Variant="Variant.Outlined"
+                                     HelperText="You can edit your organization name" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudTextField Label="Created Date"
+                                     Value="@_tenantSettings.CreatedAt.ToString()" ReadOnly="true"
+                                     Variant="Variant.Outlined" />
+                    </MudItem>
+                    <MudItem xs="12" md="6">
+                        <MudTextField Label="Status"
+                                     Value="@(_tenantSettings.IsActive ? "Active" : "Suspended")"
+                                     ReadOnly="true"
+                                     Variant="Variant.Outlined" />
+                    </MudItem>
+                </MudGrid>
+                <MudButton Variant="Variant.Filled"
+                          Color="Color.Primary"
+                          StartIcon="@Icons.Material.Filled.Save"
+                          OnClick="SaveSettings"
+                          Disabled="@_isSaving"
+                          Class="mt-3">
+                    @if (_isSaving)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                        <span>Saving...</span>
+                    }
+                    else
+                    {
+                        <span>Save Changes</span>
+                    }
+                </MudButton>
+            </MudPaper>
+
+            @* Main Map Selection *@
+            <MudPaper Elevation="2" Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-3">Main Map</MudText>
+                <MudText Typo="Typo.body2" Class="mb-3">
+                    Select which map should load by default when users visit the map viewer.
+                </MudText>
+                @if (_mapsLoading)
+                {
+                    <MudProgressLinear Indeterminate="true" Size="Size.Small" />
+                }
+                else if (_availableMaps != null && _availableMaps.Count > 0)
+                {
+                    <MudSelect T="int?"
+                              Label="Default Map"
+                              @bind-Value="@_selectedMainMapId"
+                              Variant="Variant.Outlined"
+                              Clearable="true"
+                              HelperText="Leave empty to use the first map by priority">
+                        @foreach (var map in _availableMaps)
+                        {
+                            <MudSelectItem T="int?" Value="@map.ID">
+                                @if (map.MapInfo.IsMainMap)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" Color="Color.Primary" Class="me-1" />
+                                }
+                                @map.MapInfo.Name
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton Variant="Variant.Filled"
+                              Color="Color.Primary"
+                              StartIcon="@Icons.Material.Filled.Save"
+                              OnClick="SaveMainMap"
+                              Disabled="@_isSavingMainMap"
+                              Class="mt-3">
+                        @if (_isSavingMainMap)
+                        {
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="me-2" />
+                            <span>Saving...</span>
+                        }
+                        else
+                        {
+                            <span>Save Main Map</span>
+                        }
+                    </MudButton>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true">
+                        No maps available yet. Maps will appear here after you upload your first terrain tiles.
+                    </MudAlert>
+                }
+            </MudPaper>
+
+            @* Storage Information *@
+            <MudPaper Elevation="2" Class="pa-4">
+                <MudText Typo="Typo.h6" Class="mb-3">Storage Usage</MudText>
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    <strong>Current Usage:</strong> @FormatStorageSize(_tenantSettings.CurrentStorageMB) /
+                    @FormatStorageSize(_tenantSettings.StorageQuotaMB)
+                </MudText>
+                @{
+                    var usagePercent = _tenantSettings.StorageQuotaMB > 0
+                        ? (_tenantSettings.CurrentStorageMB / _tenantSettings.StorageQuotaMB) * 100
+                        : 0;
+                }
+                <MudProgressLinear Value="@usagePercent"
+                                  Color="@(usagePercent >= 90 ? Color.Error : (usagePercent >= 75 ? Color.Warning : Color.Success))"
+                                  Size="Size.Large"
+                                  Class="mb-2">
+                    <MudText Typo="Typo.body2">@usagePercent.ToString("F1")%</MudText>
+                </MudProgressLinear>
+                @if (usagePercent >= 90)
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">
+                        You're approaching your storage quota limit. Please contact support to request a quota increase.
+                    </MudAlert>
+                }
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
+                    Storage quota is managed by system administrators. To request a quota increase, please contact support.
+                </MudText>
+            </MudPaper>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Warning">
+                Failed to load tenant settings. Please try refreshing the page.
+            </MudAlert>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    private TenantDto? _tenantSettings;
+    private bool _isLoading = true;
+    private bool _isSaving = false;
+    private List<HnHMapperServer.Web.Models.MapInfoModel> _availableMaps = new();
+    private bool _mapsLoading = true;
+    private int? _selectedMainMapId;
+    private bool _isSavingMainMap = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Task.WhenAll(LoadSettings(), LoadMaps());
+    }
+
+    private async Task LoadSettings()
+    {
+        _isLoading = true;
+        try
+        {
+            var tenantId = TenantContext.CurrentTenant?.Id;
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                // Fallback to fetching tenants
+                var tenants = await TenantContext.GetTenantsAsync();
+                tenantId = tenants.FirstOrDefault()?.Id;
+            }
+
+            // Fall back to getting TenantId from user claims
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+                tenantId = authState.User.FindFirst(HnHMapperServer.Core.Constants.AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+
+                Logger.LogInformation("Got tenant ID from claims: {TenantId}", tenantId);
+            }
+
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                Snackbar.Add("Unable to determine your tenant. Please contact support.", Severity.Error);
+                Logger.LogError("Unable to determine tenant ID for user");
+                return;
+            }
+
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync($"/api/tenants/{tenantId}/settings");
+
+            if (response.IsSuccessStatusCode)
+            {
+                _tenantSettings = await response.Content.ReadFromJsonAsync<TenantDto>();
+            }
+            else
+            {
+                Logger.LogWarning("Failed to load tenant settings: {StatusCode}", response.StatusCode);
+                Snackbar.Add("Failed to load tenant settings.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading tenant settings");
+            Snackbar.Add("Failed to load tenant settings.", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task SaveSettings()
+    {
+        if (_tenantSettings == null) return;
+
+        _isSaving = true;
+        try
+        {
+            var tenantId = TenantContext.CurrentTenant?.Id ?? _tenantSettings.Id;
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var payload = new { Name = _tenantSettings.Name };
+            var response = await httpClient.PutAsJsonAsync($"/api/tenants/{tenantId}/settings", payload);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add("Settings saved successfully!", Severity.Success);
+                await LoadSettings();
+            }
+            else
+            {
+                Snackbar.Add("Failed to save settings.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error saving tenant settings");
+            Snackbar.Add("Failed to save settings.", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task LoadMaps()
+    {
+        _mapsLoading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+
+            // Load all maps
+            var mapsResponse = await httpClient.GetAsync("/map/api/maps");
+            if (mapsResponse.IsSuccessStatusCode)
+            {
+                var maps = await mapsResponse.Content.ReadFromJsonAsync<List<HnHMapperServer.Web.Models.MapInfoModel>>();
+                if (maps != null)
+                {
+                    _availableMaps = maps;
+                }
+            }
+
+            // Load current config to get main map ID
+            var configResponse = await httpClient.GetAsync("/map/api/config");
+            if (configResponse.IsSuccessStatusCode)
+            {
+                var config = await configResponse.Content.ReadFromJsonAsync<HnHMapperServer.Web.Models.MapConfig>();
+                if (config != null)
+                {
+                    _selectedMainMapId = config.MainMapId;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading maps");
+            Snackbar.Add("Failed to load maps.", Severity.Error);
+        }
+        finally
+        {
+            _mapsLoading = false;
+        }
+    }
+
+    private async Task SaveMainMap()
+    {
+        _isSavingMainMap = true;
+        try
+        {
+            var tenantId = TenantContext.CurrentTenant?.Id;
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+                tenantId = authState.User.FindFirst(HnHMapperServer.Core.Constants.AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+            }
+
+            if (string.IsNullOrEmpty(tenantId))
+            {
+                Snackbar.Add("Unable to determine your tenant.", Severity.Error);
+                return;
+            }
+
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var payload = new { MapId = _selectedMainMapId };
+            var response = await httpClient.PostAsJsonAsync($"/api/tenants/{tenantId}/config/main-map", payload);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add("Main map saved successfully!", Severity.Success);
+                // Reload maps to update the IsMainMap flag
+                await LoadMaps();
+            }
+            else
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to save main map: {StatusCode} - {Error}", response.StatusCode, error);
+                Snackbar.Add("Failed to save main map.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error saving main map");
+            Snackbar.Add("Failed to save main map.", Severity.Error);
+        }
+        finally
+        {
+            _isSavingMainMap = false;
+        }
+    }
+
+    private string FormatStorageSize(double mb)
+    {
+        if (mb >= 1024)
+        {
+            return $"{(mb / 1024):F2} GB";
+        }
+        return $"{mb:F0} MB";
+    }
+}

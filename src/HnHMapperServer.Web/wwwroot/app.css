@@ -1,0 +1,706 @@
+h1:focus {
+    outline: none;
+}
+
+.valid.modified:not([type=checkbox]) {
+    outline: 1px solid #26b050;
+}
+
+.invalid {
+    outline: 1px solid #e50000;
+}
+
+.validation-message {
+    color: #e50000;
+}
+
+.blazor-error-boundary {
+    background: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTYiIGhlaWdodD0iNDkiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiIG92ZXJmbG93PSJoaWRkZW4iPjxkZWZzPjxjbGlwUGF0aCBpZD0iY2xpcDAiPjxyZWN0IHg9IjIzNSIgeT0iNTEiIHdpZHRoPSI1NiIgaGVpZ2h0PSI0OSIvPjwvY2xpcFBhdGg+PC9kZWZzPjxnIGNsaXAtcGF0aD0idXJsKCNjbGlwMCkiIHRyYW5zZm9ybT0idHJhbnNsYXRlKC0yMzUgLTUxKSI+PHBhdGggZD0iTTI2My41MDYgNTFDMjY0LjcxNyA1MSAyNjUuODEzIDUxLjQ4MzcgMjY2LjYwNiA1Mi4yNjU4TDI2Ny4wNTIgNTIuNzk4NyAyNjcuNTM5IDUzLjYyODMgMjkwLjE4NSA5Mi4xODMxIDI5MC41NDUgOTIuNzk1IDI5MC42NTYgOTIuOTk2QzI5MC44NzcgOTMuNTEzIDI5MSA5NC4wODE1IDI5MSA5NC42NzgyIDI5MSA5Ny4wNjUxIDI4OS4wMzggOTkgMjg2LjYxNyA5OUwyNDAuMzgzIDk5QzIzNy45NjMgOTkgMjM2IDk3LjA2NTEgMjM2IDk0LjY3ODIgMjM2IDk0LjM3OTkgMjM2LjAzMSA5NC4wODg2IDIzNi4wODkgOTMuODA3MkwyMzYuMzM4IDkzLjAxNjIgMjM2Ljg1OCA5Mi4xMzE0IDI1OS40NzMgNTMuNjI5NCAyNTkuOTYxIDUyLjc5ODUgMjYwLjQwNyA1Mi4yNjU4QzI2MS4yIDUxLjQ4MzcgMjYyLjI5NiA1MSAyNjMuNTA2IDUxWk0yNjMuNTg2IDY2LjAxODNDMjYwLjczNyA2Ni4wMTgzIDI1OS4zMTMgNjcuMTI0NSAyNTkuMzEzIDY5LjMzNyAyNTkuMzEzIDY5LjYxMDIgMjU5LjMzMiA2OS44NjA4IDI1OS4zNzEgNzAuMDg4N0wyNjEuNzk1IDg0LjAxNjEgMjY1LjM4IDg0LjAxNjEgMjY3LjgyMSA2OS43NDc1QzI2Ny44NiA2OS43MzA5IDI2Ny44NzkgNjkuNTg3NyAyNjcuODc5IDY5LjMxNzkgMjY3Ljg3OSA2Ny4xMTgyIDI2Ni40NDggNjYuMDE4MyAyNjMuNTg2IDY2LjAxODNaTTI2My41NzYgODYuMDU0N0MyNjEuMDQ5IDg2LjA1NDcgMjU5Ljc4NiA4Ny4zMDA1IDI1OS43ODYgODkuNzkyMSAyNTkuNzg2IDkyLjI4MzcgMjYxLjA0OSA5My41Mjk1IDI2My41NzYgOTMuNTI5NSAyNjYuMTE2IDkzLjUyOTUgMjY3LjM4NyA5Mi4yODM3IDI2Ny4zODcgODkuNzkyMSAyNjcuMzg3IDg3LjMwMDUgMjY2LjExNiA4Ni4wNTQ3IDI2My41NzYgODYuMDU0N1oiIGZpbGw9IiNGRkU1MDAiIGZpbGwtcnVsZT0iZXZlbm9kZCIvPjwvZz48L3N2Zz4=) no-repeat 1rem/1.8rem, #b32121;
+    padding: 1rem 1rem 1rem 3.7rem;
+    color: white;
+}
+
+    .blazor-error-boundary::after {
+        content: "An error has occurred."
+    }
+
+.darker-border-checkbox.form-check-input {
+    border-color: #929292;
+}
+
+/* Fix MudBlazor popover positioning in right drawer */
+/* The popover provider container needs to respect the drawer positioning */
+/* Removed global popover provider overrides to allow native MudBlazor positioning */
+
+/* Global fallback: Lighten drawer overlay for better map visibility on mobile/tablet */
+/* This applies when the overlay is rendered at document root instead of within the drawer */
+.mud-drawer-overlay,
+.mud-overlay,
+.mud-overlay-dark {
+    background-color: rgba(0,0,0,0.25) !important;
+}
+
+/* Global background image - automatically applied to all pages */
+body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: url('/background.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: blur(20px);
+    z-index: -1;
+}
+
+/* Glassmorphism effect - modern frosted glass UI */
+.glass-morphism {
+    background: rgba(255, 255, 255, 0.55) !important;
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.glass-appbar {
+    background: rgba(255, 255, 255, 0.65) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+}
+
+/* Global container styling - containers are transparent to show background */
+.mud-container {
+    background-color: transparent !important;
+}
+
+/* ============================================================================
+   COMPREHENSIVE GLASSMORPHISM DESIGN SYSTEM
+   Auto-applies glass effect to all components across the application
+   ============================================================================ */
+
+/* Context-based Auto-Styling - Auth Pages */
+.auth-page .mud-paper,
+.auth-page .mud-card {
+    background-color: rgba(255, 255, 255, 0.80) !important; /* Increased from 0.55 for better text readability */
+    backdrop-filter: blur(20px); /* Increased from 18px to match buttons */
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Strengthened from 0.18 */
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    color: #424242 !important; /* Dark text for readability */
+}
+
+.auth-page .mud-alert {
+    background-color: rgba(255, 255, 255, 0.75) !important; /* Increased from 0.5 */
+    backdrop-filter: blur(18px); /* Increased from 15px */
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Strengthened from 0.2 */
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Context-based Auto-Styling - Admin Panel */
+.admin-panel .mud-paper,
+.admin-panel .mud-card {
+    background-color: rgba(255, 255, 255, 0.80) !important; /* Increased from 0.55 for better text readability */
+    backdrop-filter: blur(20px); /* Increased from 18px to match buttons */
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Strengthened from 0.18 */
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    color: #424242 !important; /* Dark text for readability */
+}
+
+.admin-panel .mud-alert {
+    background-color: rgba(255, 255, 255, 0.75) !important; /* Increased from 0.5 */
+    backdrop-filter: blur(18px); /* Increased from 15px */
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Strengthened from 0.2 */
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Context-based Auto-Styling - SuperAdmin Panel */
+.superadmin-panel .mud-paper,
+.superadmin-panel .mud-card {
+    background-color: rgba(255, 255, 255, 0.80) !important; /* Increased from 0.55 for better text readability */
+    backdrop-filter: blur(20px); /* Increased from 18px to match buttons */
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Strengthened from 0.18 */
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    color: #424242 !important; /* Dark text for readability */
+}
+
+.superadmin-panel .mud-alert {
+    background-color: rgba(255, 255, 255, 0.75) !important; /* Increased from 0.5 */
+    backdrop-filter: blur(18px); /* Increased from 15px */
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Strengthened from 0.2 */
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Context-based Auto-Styling - Map View */
+.map-view .mud-paper,
+.map-view .mud-card {
+    background-color: rgba(255, 255, 255, 0.75) !important; /* Increased from 0.6 for better text readability */
+    backdrop-filter: blur(20px); /* Increased from 18px to match buttons */
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Strengthened from 0.18 */
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Global Dialog Glassmorphism */
+.mud-dialog .mud-dialog-content {
+    background-color: rgba(255, 255, 255, 0.6) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+.mud-dialog-surface {
+    background-color: rgba(255, 255, 255, 0.6) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15);
+}
+
+/* Global Drawer Glassmorphism */
+.mud-drawer {
+    background-color: rgba(255, 255, 255, 0.55) !important;
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.mud-drawer-content {
+    background-color: transparent !important;
+}
+
+/* MudPaper inside MudDrawer - force glassmorphism with high specificity */
+.mud-drawer .mud-paper,
+.mud-drawer-content .mud-paper,
+.map-sidebar .mud-paper {
+    background-color: rgba(255, 255, 255, 0.75) !important; /* Increased from 0.6 for better text readability */
+    backdrop-filter: blur(20px) !important; /* Increased from 18px to match buttons */
+    -webkit-backdrop-filter: blur(20px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.3) !important; /* Strengthened from 0.18 */
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Override MudBlazor elevation backgrounds in drawers */
+.mud-drawer .mud-elevation-0,
+.mud-drawer .mud-elevation-1,
+.mud-drawer .mud-elevation-2,
+.mud-drawer .mud-elevation-3,
+.mud-drawer .mud-paper.mud-elevation-0,
+.mud-drawer .mud-paper.mud-elevation-1,
+.mud-drawer .mud-paper.mud-elevation-2,
+.mud-drawer .mud-paper.mud-elevation-3 {
+    background-color: rgba(255, 255, 255, 0.75) !important; /* Increased from 0.6 for better text readability */
+    backdrop-filter: blur(20px) !important; /* Increased from 18px to match buttons */
+    -webkit-backdrop-filter: blur(20px) !important;
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Global Tab Panel Glassmorphism - Multiple selectors */
+.mud-tabs-panels {
+    background-color: transparent !important;
+}
+
+.mud-tabs-toolbar,
+.mud-tabs-toolbar-wrapper,
+div[class*="mud-tabs-toolbar"] {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.mud-tabs-toolbar-content,
+.mud-tabs-wrapper,
+.mud-tabs-toolbar-inner {
+    background-color: transparent !important;
+}
+
+/* Tab items themselves */
+.mud-tab,
+.mud-button-root.mud-tab {
+    background-color: transparent !important;
+}
+
+/* Global DataGrid/Table Glassmorphism */
+.admin-panel .mud-table,
+.superadmin-panel .mud-table,
+.auth-page .mud-table,
+.map-view .mud-table {
+    background-color: transparent !important;
+}
+
+.admin-panel .mud-table-container,
+.superadmin-panel .mud-table-container,
+.auth-page .mud-table-container,
+.map-view .mud-table-container {
+    background-color: transparent !important;
+}
+
+.admin-panel .mud-table thead,
+.admin-panel .mud-table tbody,
+.superadmin-panel .mud-table thead,
+.superadmin-panel .mud-table tbody,
+.auth-page .mud-table thead,
+.auth-page .mud-table tbody,
+.map-view .mud-table thead,
+.map-view .mud-table tbody {
+    background-color: transparent !important;
+}
+
+.admin-panel .mud-table-cell,
+.superadmin-panel .mud-table-cell,
+.auth-page .mud-table-cell,
+.map-view .mud-table-cell {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.admin-panel .mud-table-row:hover .mud-table-cell,
+.superadmin-panel .mud-table-row:hover .mud-table-cell,
+.auth-page .mud-table-row:hover .mud-table-cell,
+.map-view .mud-table-row:hover .mud-table-cell {
+    background-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* MudDataGrid Glassmorphism */
+.admin-panel .mud-datagrid,
+.superadmin-panel .mud-datagrid,
+.auth-page .mud-datagrid,
+.map-view .mud-datagrid {
+    background-color: transparent !important;
+}
+
+.admin-panel .mud-datagrid-header,
+.superadmin-panel .mud-datagrid-header,
+.auth-page .mud-datagrid-header,
+.map-view .mud-datagrid-header {
+    background-color: rgba(255, 255, 255, 0.3) !important;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+/* Global Popover/Menu Glassmorphism */
+.mud-popover-paper,
+.mud-menu-paper {
+    background-color: rgba(255, 255, 255, 0.7) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+/* Picker/Date Components Glassmorphism */
+.mud-picker-paper {
+    background-color: rgba(255, 255, 255, 0.7) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+/* ============================================
+   MUDLIST & MUDLISTITEM - Enhanced Readability
+   ============================================ */
+
+/* List container */
+.mud-list {
+    background-color: transparent !important;
+}
+
+/* List items - high opacity for text readability */
+.mud-list-item,
+.mud-list-item-clickable,
+.mud-list-item-button {
+    background-color: rgba(255, 255, 255, 0.75) !important;
+    backdrop-filter: blur(18px) !important;
+    -webkit-backdrop-filter: blur(18px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+    margin-bottom: 4px !important;
+    border-radius: 4px !important;
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* List item hover state */
+.mud-list-item:hover,
+.mud-list-item-clickable:hover,
+.mud-list-item-button:hover {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    border-color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* List item text/content */
+.mud-list-item-text,
+.mud-list-item-content {
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* List item avatar/icon container */
+.mud-list-item-avatar,
+.mud-list-item-icon {
+    background-color: transparent !important;
+}
+
+/* Selected list item */
+.mud-list-item.mud-selected,
+.mud-list-item-clickable.mud-selected {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    border-color: rgba(100, 181, 246, 0.6) !important; /* Primary color border */
+}
+
+/* Snackbar Glassmorphism - Override all severity colors */
+.mud-snackbar,
+.mud-snackbar.mud-snackbar-default,
+.mud-snackbar.mud-snackbar-normal,
+.mud-snackbar.mud-snackbar-success,
+.mud-snackbar.mud-snackbar-info,
+.mud-snackbar.mud-snackbar-warning,
+.mud-snackbar.mud-snackbar-error,
+.mud-alert-snackbar-success,
+.mud-alert-snackbar-info,
+.mud-alert-snackbar-warning,
+.mud-alert-snackbar-error {
+    background-color: rgba(255, 255, 255, 0.95) !important;
+    backdrop-filter: blur(25px) !important;
+    -webkit-backdrop-filter: blur(25px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2) !important;
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Override snackbar text and icon colors */
+.mud-snackbar-content-message,
+.mud-snackbar .mud-snackbar-content-message,
+.mud-snackbar .mud-icon,
+.mud-snackbar-success .mud-icon,
+.mud-snackbar-error .mud-icon,
+.mud-snackbar-warning .mud-icon,
+.mud-snackbar-info .mud-icon {
+    background-color: transparent !important;
+    color: #424242 !important; /* Dark text and icons */
+}
+
+/* Form Field Enhancement */
+.admin-panel .mud-input,
+.superadmin-panel .mud-input,
+.auth-page .mud-input,
+.map-view .mud-input {
+    background-color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Progress Indicator Glassmorphism */
+.admin-panel .mud-progress-linear,
+.superadmin-panel .mud-progress-linear,
+.auth-page .mud-progress-linear,
+.map-view .mud-progress-linear {
+    background-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* Chip Enhancement - Override all MudBlazor chip colors */
+.mud-chip.mud-chip-filled,
+.mud-chip.mud-chip-color-default,
+.mud-chip.mud-chip-color-primary,
+.mud-chip.mud-chip-color-secondary,
+.mud-chip.mud-chip-color-tertiary,
+.mud-chip.mud-chip-color-success,
+.mud-chip.mud-chip-color-warning,
+.mud-chip.mud-chip-color-error,
+.mud-chip.mud-chip-color-info,
+.mud-chip.mud-chip-color-dark {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(15px) !important;
+    -webkit-backdrop-filter: blur(15px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+    color: #424242 !important; /* Dark text for readability */
+}
+
+/* Override chip text color to be dark */
+.mud-chip .mud-chip-content,
+.mud-chip.mud-chip-filled .mud-chip-content,
+.mud-chip.mud-chip-color-success .mud-chip-content,
+.mud-chip.mud-chip-color-error .mud-chip-content,
+.mud-chip.mud-chip-color-warning .mud-chip-content,
+.mud-chip.mud-chip-color-info .mud-chip-content {
+    background-color: transparent !important;
+    color: #424242 !important; /* Dark text */
+}
+
+/* ============================================
+   BUTTON GLASSMORPHISM - Enhanced Readability
+   ============================================ */
+
+/* Filled Buttons - Primary, Secondary, Tertiary, etc. */
+.mud-button-filled,
+.mud-button.mud-button-filled,
+.mud-button-filled.mud-button-filled-primary,
+.mud-button-filled.mud-button-filled-secondary,
+.mud-button-filled.mud-button-filled-tertiary,
+.mud-button-filled.mud-button-filled-success,
+.mud-button-filled.mud-button-filled-error,
+.mud-button-filled.mud-button-filled-warning,
+.mud-button-filled.mud-button-filled-info {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    color: #424242 !important; /* Dark text for readability */
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8) !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+.mud-button-filled:hover,
+.mud-button.mud-button-filled:hover {
+    background-color: rgba(255, 255, 255, 0.95) !important;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2) !important;
+    transform: translateY(-2px) !important;
+}
+
+/* Outlined Buttons - Enhanced visibility */
+.mud-button-outlined,
+.mud-button.mud-button-outlined,
+.mud-button-outlined.mud-button-outlined-primary,
+.mud-button-outlined.mud-button-outlined-secondary,
+.mud-button-outlined.mud-button-outlined-error,
+.mud-button-outlined.mud-button-outlined-success,
+.mud-button-outlined.mud-button-outlined-warning,
+.mud-button-outlined.mud-button-outlined-info,
+.mud-button-outlined.mud-button-outlined-default {
+    background-color: rgba(255, 255, 255, 0.75) !important;
+    backdrop-filter: blur(18px) !important;
+    -webkit-backdrop-filter: blur(18px) !important;
+    border: 2px solid rgba(100, 181, 246, 0.6) !important; /* Thicker border for visibility */
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12) !important;
+    color: #424242 !important; /* Dark text */
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8) !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+.mud-button-outlined.mud-button-outlined-error {
+    border-color: rgba(244, 67, 54, 0.6) !important;
+}
+
+.mud-button-outlined.mud-button-outlined-success {
+    border-color: rgba(129, 199, 132, 0.6) !important;
+}
+
+.mud-button-outlined.mud-button-outlined-warning {
+    border-color: rgba(255, 183, 77, 0.6) !important;
+}
+
+.mud-button-outlined.mud-button-outlined-secondary {
+    border-color: rgba(129, 199, 132, 0.6) !important;
+}
+
+.mud-button-outlined:hover,
+.mud-button.mud-button-outlined:hover {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    box-shadow: 0 5px 16px rgba(0, 0, 0, 0.18) !important;
+    transform: translateY(-2px) !important;
+}
+
+/* Text Buttons - Subtle background on hover */
+.mud-button-text,
+.mud-button.mud-button-text {
+    background-color: transparent !important;
+    color: #424242 !important;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8) !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+.mud-button-text:hover,
+.mud-button.mud-button-text:hover {
+    background-color: rgba(255, 255, 255, 0.5) !important;
+    backdrop-filter: blur(15px) !important;
+    -webkit-backdrop-filter: blur(15px) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+}
+
+/* Icon Buttons - Glass background for visibility */
+.mud-icon-button,
+.mud-button.mud-icon-button {
+    background-color: rgba(255, 255, 255, 0.7) !important;
+    backdrop-filter: blur(15px) !important;
+    -webkit-backdrop-filter: blur(15px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.3) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+    color: #424242 !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+.mud-icon-button:hover,
+.mud-button.mud-icon-button:hover {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+    transform: scale(1.05) !important;
+}
+
+/* Exclude switches from icon button glassmorphism to prevent oversizing */
+.mud-icon-button.mud-switch-base,
+.mud-button.mud-icon-button.mud-switch-base {
+    background-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+.mud-icon-button.mud-switch-base:hover,
+.mud-button.mud-icon-button.mud-switch-base:hover {
+    background-color: transparent !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+
+/* FAB (Floating Action Button) - Enhanced glassmorphism */
+.mud-fab,
+.mud-button.mud-fab {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2) !important;
+    color: #424242 !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+.mud-fab:hover,
+.mud-button.mud-fab:hover {
+    background-color: rgba(255, 255, 255, 0.95) !important;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25) !important;
+    transform: translateY(-3px) scale(1.05) !important;
+}
+
+/* Disabled Buttons - Lower opacity */
+.mud-button:disabled,
+.mud-button.mud-disabled,
+.mud-icon-button:disabled,
+.mud-icon-button.mud-disabled {
+    background-color: rgba(255, 255, 255, 0.4) !important;
+    color: rgba(66, 66, 66, 0.4) !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    box-shadow: none !important;
+    cursor: not-allowed !important;
+}
+
+/* Button Groups - Maintain glassmorphism in groups */
+.mud-button-group .mud-button {
+    border-right: 1px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.mud-button-group .mud-button:last-child {
+    border-right: none !important;
+}
+
+/* ============================================
+   MAP SIDEBAR MODE BUTTONS - Blend with Paper Background
+   ============================================ */
+
+/* Make MudPaper in drawer header transparent to avoid double-layering */
+.map-sidebar .drawer-header .mud-paper {
+    background-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Reduce glassmorphism on mode buttons to blend with drawer paper */
+.map-sidebar .drawer-header .mode-button.mud-button-filled,
+.map-sidebar .drawer-header .mode-button.mud-button-outlined {
+    background-color: rgba(255, 255, 255, 0.3) !important;
+    backdrop-filter: blur(10px) !important;
+    -webkit-backdrop-filter: blur(10px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.4) !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Filled (active) mode button - more prominent */
+.map-sidebar .drawer-header .mode-button.mud-button-filled {
+    background-color: rgba(255, 255, 255, 0.5) !important;
+    border: 2px solid rgba(100, 181, 246, 0.6) !important; /* Primary blue border */
+}
+
+/* Hover state for mode buttons */
+.map-sidebar .drawer-header .mode-button:hover {
+    background-color: rgba(255, 255, 255, 0.45) !important;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12) !important;
+}
+
+/* ============================================
+   MUDSWITCH FIX - Prevent oversized input and icons
+   ============================================ */
+
+/* Fix oversized checkbox input - should be hidden/constrained */
+.mud-switch-input {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Ensure thumb containers have proper padding */
+.mud-switch-thumb-small,
+.mud-switch-thumb-medium,
+.mud-switch-thumb-large {
+    padding: 2px !important;
+}
+
+/* Small switches (14px thumb) - Icon should be 10px (14 - 4px padding) */
+/* Multiple selectors for maximum specificity to override defaults */
+.mud-switch-thumb-small .mud-icon-root,
+.mud-switch-base .mud-switch-thumb-small .mud-icon-root,
+.mud-icon-button.mud-switch-base .mud-switch-thumb-small .mud-icon-root,
+.mud-switch-base-small .mud-switch-thumb-small .mud-icon-root {
+    font-size: 10px !important;
+    width: 10px !important;
+    height: 10px !important;
+    max-width: 10px !important;
+    max-height: 10px !important;
+}
+
+/* Medium switches (20px thumb, default) - Icon should be 16px (20 - 4px padding) */
+/* Multiple selectors for maximum specificity to override defaults */
+.mud-switch-thumb-medium .mud-icon-root,
+.mud-switch-base .mud-switch-thumb-medium .mud-icon-root,
+.mud-icon-button.mud-switch-base .mud-switch-thumb-medium .mud-icon-root,
+.mud-switch-base-medium .mud-switch-thumb-medium .mud-icon-root {
+    font-size: 16px !important;
+    width: 16px !important;
+    height: 16px !important;
+    max-width: 16px !important;
+    max-height: 16px !important;
+}
+
+/* Large switches (26px thumb) - Icon should be 22px (26 - 4px padding) */
+/* Multiple selectors for maximum specificity to override defaults */
+.mud-switch-thumb-large .mud-icon-root,
+.mud-switch-base .mud-switch-thumb-large .mud-icon-root,
+.mud-icon-button.mud-switch-base .mud-switch-thumb-large .mud-icon-root,
+.mud-switch-base-large .mud-switch-thumb-large .mud-icon-root {
+    font-size: 22px !important;
+    width: 22px !important;
+    height: 22px !important;
+    max-width: 22px !important;
+    max-height: 22px !important;
+}
+
+/* Future-proof: Any container in panels */
+.admin-panel .mud-container,
+.superadmin-panel .mud-container,
+.auth-page .mud-container,
+.map-view .mud-container {
+    background-color: transparent !important;
+}

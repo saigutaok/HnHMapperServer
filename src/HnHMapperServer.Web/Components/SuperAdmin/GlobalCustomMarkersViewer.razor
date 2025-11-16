@@ -1,0 +1,211 @@
+@using HnHMapperServer.Core.DTOs
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject ILogger<GlobalCustomMarkersViewer> Logger
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="3">
+        <div class="d-flex justify-space-between align-center">
+            <MudText Typo="Typo.h5">
+                <MudIcon Icon="@Icons.Material.Filled.PushPin" Class="me-2" />
+                Custom Markers Across Tenants
+            </MudText>
+            <MudButton Variant="Variant.Filled"
+                      Color="Color.Primary"
+                      StartIcon="@Icons.Material.Filled.Refresh"
+                      OnClick="LoadCustomMarkers"
+                      Disabled="@_isLoading">
+                Refresh
+            </MudButton>
+        </div>
+
+        @if (_isLoading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_response == null || !_response.CustomMarkers.Any())
+        {
+            <MudAlert Severity="Severity.Info">
+                No custom markers found across all tenants.
+            </MudAlert>
+        }
+        else
+        {
+            <MudTable T="GlobalCustomMarkerDto" Items="@_response.CustomMarkers" Hover="true" Dense="true">
+                <ToolBarContent>
+                    <MudText Typo="Typo.body2" Class="mr-2">
+                        Showing @_response.CustomMarkers.Count markers on page @_currentPage of @_response.TotalPages (@_response.TotalCount total)
+                    </MudText>
+                    <MudSpacer />
+                    <MudSelect T="int" @bind-Value="_pageSize" Label="Page Size" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mr-2" Style="width: 120px;">
+                        <MudSelectItem Value="25">25</MudSelectItem>
+                        <MudSelectItem Value="50">50</MudSelectItem>
+                        <MudSelectItem Value="100">100</MudSelectItem>
+                        <MudSelectItem Value="200">200</MudSelectItem>
+                    </MudSelect>
+                    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.NavigateBefore" OnClick="PreviousPage" Disabled="@(_currentPage <= 1)" Size="Size.Small">Previous</MudButton>
+                    <MudButton Variant="Variant.Outlined" EndIcon="@Icons.Material.Filled.NavigateNext" OnClick="NextPage" Disabled="@(_currentPage >= _response.TotalPages)" Size="Size.Small" Class="ml-2">Next</MudButton>
+                </ToolBarContent>
+                <HeaderContent>
+                    <MudTh>ID</MudTh>
+                    <MudTh>Title</MudTh>
+                    <MudTh>Tenant</MudTh>
+                    <MudTh>Map</MudTh>
+                    <MudTh>Location</MudTh>
+                    <MudTh>Icon</MudTh>
+                    <MudTh>Created By</MudTh>
+                    <MudTh>Placed</MudTh>
+                    <MudTh>Status</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="ID">
+                        <code>@context.Id</code>
+                    </MudTd>
+                    <MudTd DataLabel="Title">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body2">@context.Title</MudText>
+                            @if (!string.IsNullOrEmpty(context.Description))
+                            {
+                                <MudText Typo="Typo.caption" Class="text-muted">@context.Description</MudText>
+                            }
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Tenant">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body2">@context.TenantName</MudText>
+                            <code class="text-muted" style="font-size: 0.75rem;">@context.TenantId</code>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Map">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body2">@context.MapName</MudText>
+                            <code class="text-muted" style="font-size: 0.75rem;">ID: @context.MapId</code>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Location">
+                        <MudText Typo="Typo.body2">Grid (@context.CoordX, @context.CoordY)</MudText>
+                        <MudText Typo="Typo.caption" Class="text-muted">Pos (@context.X, @context.Y)</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Icon">
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                            @if (!string.IsNullOrEmpty(context.Icon))
+                            {
+                                <img src="@context.Icon" alt="@context.Icon" style="width: 24px; height: 24px;" />
+                            }
+                            <code class="text-muted" style="font-size: 0.75rem;">@context.Icon</code>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Created By">
+                        <MudText Typo="Typo.body2">@context.CreatedBy</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Placed">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body2">@context.PlacedAt.ToString("yyyy-MM-dd")</MudText>
+                            <MudText Typo="Typo.caption" Class="text-muted">@context.PlacedAt.ToString("HH:mm:ss")</MudText>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Status">
+                        <MudChip T="string" Size="Size.Small" Color="@(context.Hidden ? Color.Warning : Color.Success)">
+                            @(context.Hidden ? "Hidden" : "Visible")
+                        </MudChip>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+
+            @if (_response.TotalPages > 1)
+            {
+                <div class="d-flex justify-center mt-3">
+                    <MudPagination Count="@_response.TotalPages" Selected="@_currentPage" SelectedChanged="@OnPageChanged" />
+                </div>
+            }
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    private CustomMarkerResponse? _response;
+    private bool _isLoading = true;
+    private int _currentPage = 1;
+    private int _pageSize = 100;
+    private int _previousPageSize = 100;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadCustomMarkers();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_pageSize != _previousPageSize)
+        {
+            _previousPageSize = _pageSize;
+            _currentPage = 1; // Reset to first page when page size changes
+            await LoadCustomMarkers();
+        }
+    }
+
+    private async Task LoadCustomMarkers()
+    {
+        _isLoading = true;
+        try
+        {
+            Logger.LogInformation("LoadCustomMarkers: Loading custom markers (page {Page}, pageSize {PageSize})", _currentPage, _pageSize);
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync($"/api/superadmin/custom-markers?page={_currentPage}&pageSize={_pageSize}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                _response = await response.Content.ReadFromJsonAsync<CustomMarkerResponse>();
+                Logger.LogInformation("LoadCustomMarkers: Loaded {Count} custom markers", _response?.CustomMarkers?.Count ?? 0);
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to load custom markers: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add("Failed to load custom markers. Please try again.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading custom markers");
+            Snackbar.Add("Failed to load custom markers. Please try again.", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task OnPageChanged(int page)
+    {
+        _currentPage = page;
+        await LoadCustomMarkers();
+    }
+
+    private async Task PreviousPage()
+    {
+        if (_currentPage > 1)
+        {
+            _currentPage--;
+            await LoadCustomMarkers();
+        }
+    }
+
+    private async Task NextPage()
+    {
+        if (_response != null && _currentPage < _response.TotalPages)
+        {
+            _currentPage++;
+            await LoadCustomMarkers();
+        }
+    }
+
+    public class CustomMarkerResponse
+    {
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+        public int TotalCount { get; set; }
+        public int TotalPages { get; set; }
+        public List<GlobalCustomMarkerDto> CustomMarkers { get; set; } = new();
+    }
+}

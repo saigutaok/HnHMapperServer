@@ -1,0 +1,157 @@
+# Caddyfile for HnH Mapper reverse proxy configuration
+# Provides path-based routing to API and Web services with automatic HTTPS
+#
+# SETUP INSTRUCTIONS:
+# 1. Copy this file to 'Caddyfile' (without .example extension)
+# 2. Replace 'yourdomain.com' with your actual domain name
+# 3. Ensure DNS A record points to your server's IP address
+# 4. Open ports 80 and 443 on your firewall
+# 5. Run: docker compose up -d
+#
+# This configuration enables cookie sharing between Web and API services by serving
+# them from the same domain. Caddy automatically provisions HTTPS with Let's Encrypt.
+
+# Domain configuration with automatic HTTPS
+# Replace 'yourdomain.com' with your actual domain (e.g., mapper.example.com)
+yourdomain.com {
+  # Security headers for production deployment
+  header {
+    # Prevent MIME type sniffing
+    X-Content-Type-Options "nosniff"
+
+    # Prevent clickjacking attacks
+    X-Frame-Options "DENY"
+
+    # Control referrer information
+    Referrer-Policy "no-referrer"
+
+    # Content Security Policy (tuned for Blazor Server + Local Leaflet + MudBlazor)
+    # Leaflet bundled locally, only external dependencies are Google Fonts and OSM tiles
+    Content-Security-Policy "default-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none';"
+
+    # Remove server information disclosure
+    -Server
+  }
+
+  # ============================================================================
+  # Request Matchers - Define path patterns for routing decisions
+  # ============================================================================
+
+  # Match requests to the /admin page (Web UI - admin panel)
+  @adminpage path /admin
+
+  # Match requests to game client endpoints (API service)
+  @client path /client/*
+
+  # Match requests to map API endpoints (API service)
+  @mapapi path /map/api/*
+
+  # Match requests to Server-Sent Events for real-time updates (API service)
+  @mapsse path /map/updates
+
+  # Match Blazor SignalR connections (Web service - must not be compressed)
+  @blazor path /_blazor/*
+
+  # Match requests for map tile images (API service)
+  @maptiles path /map/grids/*
+
+  # Match requests to admin API endpoints (API service)
+  # Uses regex to match /admin/* but not exact /admin (which goes to Web)
+  @adminapi path_regexp adminapi ^/admin/.+
+
+  # ============================================================================
+  # Routing Rules - Forward requests to appropriate backend services
+  # Use 'route' block to ensure sequential processing (order matters!)
+  # ============================================================================
+
+  route {
+    # Handle SSE FIRST (before any encoding middleware)
+    # CRITICAL: No compression or buffering for SSE streaming to work
+    handle @mapsse {
+      header Cache-Control "no-cache"
+      header Connection "keep-alive"
+      reverse_proxy api:8080 {
+        flush_interval -1
+
+        # Disable all timeouts for long-lived SSE connections
+        transport http {
+          read_timeout 0
+          write_timeout 0
+          dial_timeout 30s
+        }
+      }
+    }
+
+    # Handle Blazor SignalR SECOND (before encoding middleware)
+    # CRITICAL: No compression for WebSocket/long-polling to work
+    handle @blazor {
+      reverse_proxy web:8080 {
+        flush_interval -1
+
+        # Disable all timeouts for long-lived SignalR connections
+        transport http {
+          read_timeout 0
+          write_timeout 0
+          dial_timeout 30s
+        }
+      }
+    }
+
+    # Now apply encoding to everything else (won't affect above handlers)
+    encode gzip
+
+    # Route game client communication to API service
+    # Examples: POST /client/{token}/gridUpload, POST /client/{token}/checkVersion
+    handle @client {
+      reverse_proxy api:8080
+    }
+
+    # Route map viewing API to API service
+    # Examples: GET /map/api/v1/characters, GET /map/api/v1/markers
+    handle @mapapi {
+      reverse_proxy api:8080
+    }
+
+    # Route map tile requests to API service
+    # Example: GET /map/grids/{mapid}/{zoom}/{x}_{y}.png
+    handle @maptiles {
+      reverse_proxy api:8080
+    }
+
+    # Route admin API endpoints to API service
+    # Examples: GET /admin/users, POST /admin/system/backup
+    handle @adminapi {
+      reverse_proxy api:8080
+    }
+
+    # Route exact /admin page to Web service (Blazor admin panel UI)
+    handle @adminpage {
+      reverse_proxy web:8080
+    }
+
+    # Default: Route all other requests to Web service (login, dashboard, etc.)
+    # Examples: GET /, GET /login, GET /password, GET /index
+    handle {
+      reverse_proxy web:8080
+    }
+  }
+}
+
+# ============================================================================
+# Automatic HTTPS with Let's Encrypt
+# ============================================================================
+#
+# Caddy automatically handles:
+# - Obtaining Let's Encrypt TLS certificates
+# - Redirecting HTTP (port 80) to HTTPS (port 443)
+# - Certificate renewal (happens automatically before expiration)
+# - HTTP/2 and modern TLS protocols
+#
+# Requirements:
+# - DNS A record pointing yourdomain.com to your server's IP address
+# - Ports 80 and 443 open on your firewall
+# - Server must be publicly accessible from the internet
+#
+# Testing with Let's Encrypt Staging (to avoid rate limits):
+# Add this line after the domain name to use staging certificates:
+#   acme_ca https://acme-staging-v02.api.letsencrypt.org/directory

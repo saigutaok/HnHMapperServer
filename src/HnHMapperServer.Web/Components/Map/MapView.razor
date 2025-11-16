@@ -1,0 +1,392 @@
+@using Microsoft.JSInterop
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Services
+@using Microsoft.Extensions.Logging
+@inject IJSRuntime JS
+@inject SafeJsInterop SafeJs
+@inject ILogger<MapView> Logger
+@implements IAsyncDisposable
+
+<div @ref="mapElement" class="leaflet-map"></div>
+
+@code {
+    [Parameter] public MapState State { get; set; } = new();
+    [Parameter] public EventCallback<(int x, int y, int z)> OnMapDragged { get; set; }
+    [Parameter] public EventCallback<(int x, int y, int z)> OnMapZoomed { get; set; }
+    [Parameter] public EventCallback<(int gridX, int gridY, int screenX, int screenY)> OnContextMenu { get; set; }
+    [Parameter] public EventCallback<int> OnMarkerClicked { get; set; }
+    [Parameter] public EventCallback<int> OnMarkerContextMenu { get; set; }
+    [Parameter] public EventCallback<(int mapId, int coordX, int coordY, int x, int y, int screenX, int screenY)> OnMapRightClick { get; set; }
+    [Parameter] public EventCallback<bool> OnMapInitialized { get; set; }
+    [Parameter] public EventCallback<int> OnMapChanged { get; set; }
+
+    private ElementReference mapElement;
+    private IJSObjectReference? jsModule;
+    private DotNetObjectReference<MapView>? dotnetRef;
+    private bool initialized = false;
+    private bool disposed = false;
+    
+    /// <summary>
+    /// Public property to check if the map view has been initialized
+    /// </summary>
+    public bool IsInitialized => initialized;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await InitializeMapAsync();
+            
+            // If State.CurrentMapId is set after initialization, update the map
+            if (initialized && State.CurrentMapId > 0 && jsModule != null)
+            {
+                await jsModule.InvokeVoidAsync("changeMap", State.CurrentMapId);
+            }
+        }
+    }
+
+    private async Task InitializeMapAsync()
+    {
+        try
+        {
+            Logger.LogInformation("Starting map initialization...");
+
+            // Load JavaScript module
+            Logger.LogDebug("Loading leaflet-interop.js module...");
+            jsModule = await JS.InvokeAsync<IJSObjectReference>(
+                "import", "./js/leaflet-interop.js");
+            Logger.LogDebug("Leaflet module loaded successfully");
+
+            // Create .NET reference for callbacks
+            dotnetRef = DotNetObjectReference.Create(this);
+            Logger.LogDebug("DotNetObjectReference created");
+
+            // Initialize map
+            Logger.LogDebug("Calling initializeMap in JavaScript...");
+            await jsModule.InvokeVoidAsync("initializeMap", mapElement, dotnetRef);
+            Logger.LogDebug("initializeMap completed");
+
+            // Set initial map ID if available (prevents requesting tiles for mapId 0)
+            if (State.CurrentMapId > 0)
+            {
+                Logger.LogDebug("Setting initial map ID: {MapId}", State.CurrentMapId);
+                await jsModule.InvokeVoidAsync("changeMap", State.CurrentMapId);
+            }
+
+            // Note: initialized flag will be set by OnMapReady() callback when Leaflet 'load' event fires
+            Logger.LogInformation("Map initialization call completed, waiting for Leaflet 'load' event...");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "CRITICAL: Failed to initialize map. This will prevent markers from loading. Exception: {Message}", ex.Message);
+            Logger.LogError("Stack trace: {StackTrace}", ex.StackTrace);
+
+            // Also log to browser console for client-side debugging
+            Console.WriteLine($"[MapView] CRITICAL ERROR during initialization: {ex.Message}");
+            Console.WriteLine($"[MapView] Stack trace: {ex.StackTrace}");
+
+            // Don't set initialized = true, map is broken
+            // This will cause the parent component to log "MapView not initialized after waiting 100x50ms"
+        }
+    }
+
+    public async Task ChangeMapAsync(int mapId)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        State.CurrentMapId = mapId;
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "changeMap", mapId);
+    }
+
+    public async Task SetOverlayMapAsync(int? mapId)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        State.OverlayMapId = mapId;
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "setOverlayMap", mapId);
+    }
+
+    public async Task SetViewAsync(int gridX, int gridY, int zoom)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "setView", gridX, gridY, zoom);
+    }
+
+    public async Task ZoomOutAsync()
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "zoomOut");
+    }
+
+    public async Task ToggleGridCoordinatesAsync(bool visible)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "toggleGridCoordinates", visible);
+    }
+
+    public async Task AddCharacterAsync(CharacterModel character)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "addCharacter", character);
+    }
+
+    public async Task UpdateCharacterAsync(CharacterModel character)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "updateCharacter", character.Id, character);
+    }
+
+    public async Task RemoveCharacterAsync(int characterId)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "removeCharacter", characterId);
+    }
+
+    public async Task AddMarkerAsync(MarkerModel marker)
+    {
+        Console.WriteLine($"[MapView] AddMarkerAsync - initialized={initialized}, jsModule={(jsModule != null ? "not null" : "null")}, disposed={disposed}");
+
+        if (!initialized || jsModule == null || disposed)
+        {
+            Console.WriteLine($"[MapView] AddMarkerAsync SKIPPED - precondition failed for marker {marker.Id} ({marker.Name})");
+            return;
+        }
+
+        Console.WriteLine($"[MapView] AddMarkerAsync - Calling SafeJs for marker {marker.Id} ({marker.Name}), Map={marker.Map}, Hidden={marker.Hidden}, Pos=({marker.Position.X},{marker.Position.Y})");
+        var result = await SafeJs.InvokeVoidSafeAsync(jsModule, "addMarker", marker);
+        Console.WriteLine($"[MapView] AddMarkerAsync - SafeJs returned {result} for marker {marker.Id}");
+    }
+
+    public async Task UpdateMarkerAsync(MarkerModel marker)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "updateMarker", marker.Id, marker);
+    }
+
+    public async Task RemoveMarkerAsync(int markerId)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "removeMarker", markerId);
+    }
+
+    public async Task AddCustomMarkerAsync(CustomMarkerViewModel marker)
+    {
+        if (!initialized || jsModule == null || disposed)
+        {
+            Console.WriteLine("[MapView] AddCustomMarkerAsync skipped because map is not initialized.");
+            return;
+        }
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "addCustomMarker", marker);
+    }
+
+    public async Task UpdateCustomMarkerAsync(CustomMarkerViewModel marker)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "updateCustomMarker", marker.Id, marker);
+    }
+
+    public async Task RemoveCustomMarkerAsync(int markerId)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "removeCustomMarker", markerId);
+    }
+
+    public async Task ClearAllCustomMarkersAsync()
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "clearAllCustomMarkers");
+    }
+
+    public async Task ToggleCharacterTooltipsAsync(bool visible)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "toggleCharacterTooltips", visible);
+    }
+
+    public async Task ToggleMarkerTooltipsAsync(string type, bool visible)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "toggleMarkerTooltips", type, visible);
+    }
+
+    public async Task RefreshTileAsync(int mapId, int x, int y, int z, long timestamp)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "refreshTile", mapId, x, y, z, timestamp);
+    }
+
+    public async Task JumpToCharacterAsync(int characterId)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "jumpToCharacter", characterId);
+    }
+
+    public async Task JumpToMarkerAsync(int markerId)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "jumpToMarker", markerId);
+    }
+
+    public async Task JumpToCustomMarkerAsync(int markerId, int? zoomLevel = null)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        Console.WriteLine($"[MapView] JumpToCustomMarkerAsync -> markerId={markerId}, zoom={zoomLevel?.ToString() ?? "null"}");
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "jumpToCustomMarker", markerId, zoomLevel);
+    }
+
+    public async Task ClearAllCharactersAsync()
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "clearAllCharacters");
+    }
+
+    public async Task SetCharactersSnapshotAsync(object charactersData)
+    {
+        Console.WriteLine($"[MapView] SetCharactersSnapshotAsync called - initialized={initialized}, jsModule={(jsModule != null ? "not null" : "null")}, disposed={disposed}");
+
+        if (!initialized || jsModule == null || disposed)
+        {
+            Console.WriteLine("[MapView] SetCharactersSnapshotAsync aborted - conditions not met");
+            return;
+        }
+
+        Console.WriteLine($"[MapView] Calling JS setCharactersSnapshot...");
+        // Use SafeJs directly - .NET JSInterop handles camelCase AND preserves array types
+        // CamelCaseJs breaks Array.isArray() checks in JavaScript
+        var result = await SafeJs.InvokeVoidSafeAsync(jsModule, "setCharactersSnapshot", charactersData);
+        Console.WriteLine($"[MapView] JS setCharactersSnapshot result: {result}");
+    }
+
+    public async Task ApplyCharacterDeltaAsync(object delta)
+    {
+        Console.WriteLine($"[MapView] ApplyCharacterDeltaAsync called");
+
+        if (!initialized || jsModule == null || disposed) return;
+
+        Console.WriteLine($"[MapView] Calling JS applyCharacterDelta...");
+        // Use SafeJs directly - .NET JSInterop handles camelCase AND preserves array types
+        // CamelCaseJs breaks Array.isArray() checks in JavaScript for delta.updates array
+        var result = await SafeJs.InvokeVoidSafeAsync(jsModule, "applyCharacterDelta", delta);
+        Console.WriteLine($"[MapView] JS applyCharacterDelta result: {result}");
+    }
+
+    public async Task ClearAllMarkersAsync()
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "clearAllMarkers");
+    }
+
+    public async Task SetMapRevisionAsync(int mapId, int revision)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "setMapRevision", mapId, revision);
+    }
+
+    // JavaScript callbacks (called from JS, different names to avoid conflicts with Parameters)
+    [JSInvokable]
+    public async Task JsOnMapDragged(int x, int y, int z)
+    {
+        State.CenterX = x;
+        State.CenterY = y;
+        State.Zoom = z;
+        await OnMapDragged.InvokeAsync((x, y, z));
+    }
+
+    [JSInvokable]
+    public async Task JsOnMapZoomed(int x, int y, int z)
+    {
+        State.CenterX = x;
+        State.CenterY = y;
+        State.Zoom = z;
+        await OnMapZoomed.InvokeAsync((x, y, z));
+    }
+
+    [JSInvokable]
+    public async Task JsOnContextMenu(int x, int y, int screenX, int screenY)
+    {
+        await OnContextMenu.InvokeAsync((x, y, screenX, screenY));
+    }
+
+    [JSInvokable]
+    public async Task JsOnMarkerClicked(int markerId)
+    {
+        await OnMarkerClicked.InvokeAsync(markerId);
+    }
+
+    [JSInvokable]
+    public async Task JsOnMarkerContextMenu(int markerId)
+    {
+        await OnMarkerContextMenu.InvokeAsync(markerId);
+    }
+
+    [JSInvokable]
+    public async Task JsOnMapRightClick(int mapId, int coordX, int coordY, int x, int y, int screenX, int screenY)
+    {
+        await OnMapRightClick.InvokeAsync((mapId, coordX, coordY, x, y, screenX, screenY));
+    }
+
+    [JSInvokable]
+    public async Task OnMapReady()
+    {
+        Logger.LogInformation("Map ready event received from JavaScript (Leaflet 'load' event fired)");
+        initialized = true;
+
+        if (OnMapInitialized.HasDelegate)
+        {
+            await OnMapInitialized.InvokeAsync(true);
+        }
+    }
+
+    [JSInvokable]
+    public async Task JsOnMapChanged(int mapId)
+    {
+        Logger.LogInformation("Map changed event received from JavaScript for map {MapId}", mapId);
+
+        if (OnMapChanged.HasDelegate)
+        {
+            await OnMapChanged.InvokeAsync(mapId);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        disposed = true;
+        
+        if (jsModule != null)
+        {
+            try
+            {
+                await jsModule.DisposeAsync();
+            }
+            catch
+            {
+                // Ignore disposal errors
+            }
+            jsModule = null;
+        }
+
+        dotnetRef?.Dispose();
+        dotnetRef = null;
+    }
+}

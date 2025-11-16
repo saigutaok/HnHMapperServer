@@ -1,0 +1,207 @@
+@using HnHMapperServer.Core.DTOs
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject ILogger<GlobalMapsViewer> Logger
+
+<MudPaper Class="pa-4">
+    <MudStack Spacing="3">
+        <div class="d-flex justify-space-between align-center">
+            <MudText Typo="Typo.h5">
+                <MudIcon Icon="@Icons.Material.Filled.Map" Class="me-2" />
+                All Maps Across Tenants
+            </MudText>
+            <MudButton Variant="Variant.Filled"
+                      Color="Color.Primary"
+                      StartIcon="@Icons.Material.Filled.Refresh"
+                      OnClick="LoadMaps"
+                      Disabled="@_isLoading">
+                Refresh
+            </MudButton>
+        </div>
+
+        @if (_isLoading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (!_maps.Any())
+        {
+            <MudAlert Severity="Severity.Info">
+                No maps found across all tenants.
+            </MudAlert>
+        }
+        else
+        {
+            <MudTable T="GlobalMapDto" Items="@_filteredMaps" Hover="true" Dense="true" Filter="@MapFilter">
+                <ToolBarContent>
+                    <MudTextField @bind-Value="_searchString"
+                                 Placeholder="Search by map name or tenant..."
+                                 Adornment="Adornment.Start"
+                                 AdornmentIcon="@Icons.Material.Filled.Search"
+                                 IconSize="Size.Medium"
+                                 Class="mt-0"
+                                 Immediate="true"
+                                 OnKeyUp="@(() => StateHasChanged())" />
+                    <MudSpacer />
+                    <MudText Typo="Typo.body2" Class="mr-2">
+                        Showing @_filteredMaps.Count of @_maps.Count maps
+                    </MudText>
+                </ToolBarContent>
+                <HeaderContent>
+                    <MudTh>Map ID</MudTh>
+                    <MudTh>Map Name</MudTh>
+                    <MudTh>Tenant</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh>Tiles</MudTh>
+                    <MudTh>Markers</MudTh>
+                    <MudTh>Custom</MudTh>
+                    <MudTh>Priority</MudTh>
+                    <MudTh>Created</MudTh>
+                    <MudTh>Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Map ID">
+                        <code>@context.Id</code>
+                    </MudTd>
+                    <MudTd DataLabel="Map Name">
+                        <MudText Typo="Typo.body2">@context.Name</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Tenant">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.body2">@context.TenantName</MudText>
+                            <code class="text-muted" style="font-size: 0.75rem;">@context.TenantId</code>
+                        </MudStack>
+                    </MudTd>
+                    <MudTd DataLabel="Status">
+                        <MudChip T="string" Size="Size.Small" Color="@(context.Hidden ? Color.Warning : Color.Success)">
+                            @(context.Hidden ? "Hidden" : "Visible")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd DataLabel="Tiles">
+                        <MudText Typo="Typo.body2">@context.TileCount</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Markers">
+                        <MudText Typo="Typo.body2">@context.MarkerCount</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Custom">
+                        <MudText Typo="Typo.body2">@context.CustomMarkerCount</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Priority">
+                        <MudText Typo="Typo.body2">@context.Priority</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Created">
+                        <MudText Typo="Typo.body2">@context.CreatedAt.ToString("yyyy-MM-dd HH:mm")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Actions">
+                        <MudStack Row="true" Spacing="1">
+                            <MudTooltip Text="View tenant maps">
+                                <MudIconButton Icon="@Icons.Material.Filled.Visibility"
+                                              Color="Color.Primary"
+                                              Size="Size.Small"
+                                              Href="@($"/superadmin/map/{context.TenantId}")" />
+                            </MudTooltip>
+                            <MudTooltip Text="Delete map">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                              Color="Color.Error"
+                                              Size="Size.Small"
+                                              OnClick="@(() => DeleteMap(context))" />
+                            </MudTooltip>
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </MudStack>
+</MudPaper>
+
+@code {
+    private List<GlobalMapDto> _maps = new();
+    private List<GlobalMapDto> _filteredMaps = new();
+    private bool _isLoading = true;
+    private string _searchString = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadMaps();
+    }
+
+    private async Task LoadMaps()
+    {
+        _isLoading = true;
+        try
+        {
+            Logger.LogInformation("LoadMaps: Loading all maps across tenants");
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/api/superadmin/maps");
+
+            if (response.IsSuccessStatusCode)
+            {
+                _maps = await response.Content.ReadFromJsonAsync<List<GlobalMapDto>>() ?? new List<GlobalMapDto>();
+                _filteredMaps = _maps;
+                Logger.LogInformation("LoadMaps: Loaded {Count} maps", _maps.Count);
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to load maps: {StatusCode}, Body={Body}", response.StatusCode, errorBody);
+                Snackbar.Add("Failed to load maps. Please try again.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading maps");
+            Snackbar.Add("Failed to load maps. Please try again.", Severity.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private bool MapFilter(GlobalMapDto map)
+    {
+        if (string.IsNullOrWhiteSpace(_searchString))
+            return true;
+
+        var search = _searchString.ToLower();
+        return map.Name.ToLower().Contains(search) ||
+               map.TenantName.ToLower().Contains(search) ||
+               map.TenantId.ToLower().Contains(search) ||
+               map.Id.ToString().Contains(search);
+    }
+
+    private async Task DeleteMap(GlobalMapDto map)
+    {
+        var confirmed = await DialogService.ShowMessageBox(
+            "Confirm Deletion",
+            $"Are you sure you want to delete map '{map.Name}' (ID: {map.Id}) from tenant '{map.TenantName}'? This will delete all tiles, markers, and custom markers associated with this map. This action cannot be undone.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirmed != true)
+            return;
+
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.DeleteAsync($"/api/superadmin/tenants/{map.TenantId}/maps/{map.Id}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Map '{map.Name}' deleted successfully.", Severity.Success);
+                await LoadMaps(); // Reload the list
+            }
+            else
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to delete map {MapId}: {StatusCode}, Body={Body}", map.Id, response.StatusCode, errorBody);
+                Snackbar.Add($"Failed to delete map. Please try again.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error deleting map {MapId}", map.Id);
+            Snackbar.Add("Failed to delete map. Please try again.", Severity.Error);
+        }
+    }
+}

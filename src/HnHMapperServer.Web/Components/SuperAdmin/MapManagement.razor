@@ -1,0 +1,198 @@
+@using HnHMapperServer.Web.Models
+@using HnHMapperServer.Web.Components.Admin
+@inject IHttpClientFactory HttpClientFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudText Typo="Typo.h5" Class="mb-4">Map Management</MudText>
+
+<MudTable Items="@maps" Hover="true" Striped="true" Dense="true" Elevation="2" Loading="@isLoading">
+    <LoadingContent>
+        <MudStack AlignItems="AlignItems.Center" Spacing="2" Class="pa-8">
+            <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+            <MudText Typo="Typo.body1" Color="Color.Default">Loading maps...</MudText>
+        </MudStack>
+    </LoadingContent>
+    <NoRecordsContent>
+        <MudAlert Severity="Severity.Info" Class="ma-4">
+            No maps found. Maps will be created automatically when clients upload grid data.
+        </MudAlert>
+    </NoRecordsContent>
+    <HeaderContent>
+        <MudTh>ID</MudTh>
+        <MudTh>Name</MudTh>
+        <MudTh>Hidden</MudTh>
+        <MudTh>Priority</MudTh>
+        <MudTh Style="text-align: right;">Actions</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="ID">@context.Id</MudTd>
+        <MudTd DataLabel="Name">
+            <MudText>@context.Name</MudText>
+        </MudTd>
+        <MudTd DataLabel="Hidden">
+            @if (context.Hidden)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Icon="@Icons.Material.Filled.VisibilityOff">Hidden</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Success" Icon="@Icons.Material.Filled.Visibility">Visible</MudChip>
+            }
+        </MudTd>
+        <MudTd DataLabel="Priority">@context.Priority</MudTd>
+        <MudTd DataLabel="Actions" Style="text-align: right;">
+            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           OnClick="@(() => ShowEditDialog(context))"
+                           Title="Edit map" />
+            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                           Color="Color.Error"
+                           Size="Size.Small"
+                           OnClick="@(() => ShowDeleteConfirmation(context))"
+                           Title="Delete map" />
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private List<AdminMapDto>? maps;
+    private bool isLoading = true;
+
+    /// <summary>
+    /// Load all maps on component initialization.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadMaps();
+    }
+
+    /// <summary>
+    /// Fetch all maps from the admin API.
+    /// </summary>
+    private async Task LoadMaps()
+    {
+        isLoading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/admin/maps");
+
+            if (response.IsSuccessStatusCode)
+            {
+                maps = await response.Content.ReadFromJsonAsync<List<AdminMapDto>>();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                Snackbar.Add("You are not authorized to manage maps. Please ensure you're logged in as an admin.", Severity.Error);
+            }
+            else
+            {
+                Snackbar.Add($"Failed to load maps: {response.StatusCode}", Severity.Error);
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Network error loading maps: {ex.Message}", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load maps: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    /// <summary>
+    /// Show a dialog to edit a map (name, hidden, priority).
+    /// </summary>
+    private async Task ShowEditDialog(AdminMapDto map)
+    {
+        var parameters = new DialogParameters
+        {
+            { "MapId", map.Id },
+            { "CurrentName", map.Name },
+            { "CurrentHidden", map.Hidden },
+            { "CurrentPriority", map.Priority }
+        };
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+
+        var dialog = await DialogService.ShowAsync<EditMapDialog>("Edit Map", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            // Reload maps to reflect the changes
+            await LoadMaps();
+        }
+    }
+
+    /// <summary>
+    /// Show a confirmation dialog before deleting a map.
+    /// </summary>
+    private async Task ShowDeleteConfirmation(AdminMapDto map)
+    {
+        var result = await DialogService.ShowMessageBox(
+            "Delete Map",
+            $"Are you sure you want to delete map '{map.Name}' (ID: {map.Id})?\n\n" +
+            "This will permanently delete:\n" +
+            "• All grids in this map\n" +
+            "• All markers in this map\n" +
+            "• All tile images (zoom levels 0-6)\n" +
+            "• All related files on disk\n\n" +
+            "This action cannot be undone!",
+            yesText: "Delete Forever",
+            cancelText: "Cancel");
+
+        if (result == true)
+        {
+            await DeleteMap(map.Id);
+        }
+    }
+
+    /// <summary>
+    /// Delete a map via the admin API.
+    /// </summary>
+    private async Task DeleteMap(int mapId)
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.DeleteAsync($"/admin/maps/{mapId}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<DeleteMapResponse>();
+                Snackbar.Add(result?.Message ?? "Map deleted successfully", Severity.Success);
+                await LoadMaps();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Snackbar.Add("Map not found. It may have already been deleted.", Severity.Warning);
+                await LoadMaps();
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                Snackbar.Add($"Failed to delete map: {errorContent}", Severity.Error);
+            }
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Network error deleting map: {ex.Message}", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to delete map: {ex.Message}", Severity.Error);
+        }
+    }
+}
+

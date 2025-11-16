@@ -1,0 +1,112 @@
+@using HnHMapperServer.Web.Models
+@using MudBlazor
+
+<!-- Players panel with filter and list -->
+<MudTextField @bind-Value="playerFilter"
+              Placeholder="Filter players..."
+              Adornment="Adornment.Start"
+              AdornmentIcon="@Icons.Material.Outlined.Search"
+              Variant="Variant.Outlined"
+              Margin="Margin.Dense"
+              Immediate="true"
+              Class="mb-3" />
+
+@if (IsFollowing && FollowingCharacterId.HasValue)
+{
+    <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+            <MudText Typo="Typo.body2">Following: @(Characters.FirstOrDefault(c => c.Id == FollowingCharacterId)?.Name ?? "Unknown")</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => OnStopFollowing.InvokeAsync())" />
+        </MudStack>
+    </MudAlert>
+}
+
+@if (FilteredPlayers.Any())
+{
+    <MudText Typo="Typo.caption" Class="mb-2">@FilteredPlayers.Count() active player(s)</MudText>
+    <MudList T="string" Dense="true" Clickable="true">
+        @foreach (var player in FilteredPlayers)
+        {
+            <MudListItem T="string" OnClick="@(() => OnPlayerSelected.InvokeAsync(player))"
+                         Class="@(FollowingCharacterId == player.Id ? "mud-selected-item" : "")">
+                <MudStack Row="false" Spacing="0">
+                    <MudText Typo="Typo.body2">
+                        @player.Name
+                        @if (FollowingCharacterId == player.Id)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.MyLocation" Size="Size.Small" Color="Color.Success" Class="ml-1" />
+                        }
+                    </MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@GetMapName(player.Map)</MudText>
+                </MudStack>
+            </MudListItem>
+        }
+    </MudList>
+}
+else
+{
+    <MudAlert Severity="Severity.Info" Dense="true">
+        @(string.IsNullOrWhiteSpace(playerFilter) ? "No active players" : "No players match filter")
+    </MudAlert>
+}
+
+@code {
+    /// <summary>
+    /// List of all active characters/players
+    /// </summary>
+    [Parameter] public IReadOnlyList<CharacterModel> Characters { get; set; } = Array.Empty<CharacterModel>();
+    
+    /// <summary>
+    /// List of all available maps (for displaying map names)
+    /// </summary>
+    [Parameter] public IReadOnlyList<MapInfoModel> Maps { get; set; } = Array.Empty<MapInfoModel>();
+    
+    /// <summary>
+    /// Whether follow mode is currently active
+    /// </summary>
+    [Parameter] public bool IsFollowing { get; set; }
+    
+    /// <summary>
+    /// ID of the character being followed (null if not following)
+    /// </summary>
+    [Parameter] public int? FollowingCharacterId { get; set; }
+    
+    /// <summary>
+    /// Event callback when a player is selected
+    /// </summary>
+    [Parameter] public EventCallback<CharacterModel> OnPlayerSelected { get; set; }
+    
+    /// <summary>
+    /// Event callback when stop following is requested
+    /// </summary>
+    [Parameter] public EventCallback OnStopFollowing { get; set; }
+    
+    /// <summary>
+    /// Filter text for player list
+    /// </summary>
+    private string playerFilter = "";
+    
+    /// <summary>
+    /// Filtered list of players based on current filter text
+    /// </summary>
+    private IEnumerable<CharacterModel> FilteredPlayers =>
+        Characters
+            .Where(c => string.IsNullOrWhiteSpace(playerFilter) ||
+                       c.Name.Contains(playerFilter, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => c.Name);
+    
+    /// <summary>
+    /// Get map name by ID for display
+    /// </summary>
+    private string GetMapName(int mapId)
+    {
+        var map = Maps.FirstOrDefault(m => m.ID == mapId);
+        return map?.MapInfo.Name ?? $"Map {mapId}";
+    }
+}
+
+
+
+
+
+

@@ -1,0 +1,34 @@
+/* Inline dropdown styling to keep the list anchored under the trigger */
+.select-wrapper {
+    position: relative;
+}
+
+.select-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    width: 100%;
+    z-index: 2001; /* above drawer content */
+}
+
+/* Paper surface styling for dropdown */
+::deep .select-dropdown .mud-paper {
+    background: var(--mud-palette-surface);
+    border: 1px solid var(--mud-palette-divider);
+    border-radius: 8px;
+    box-shadow: var(--mud-elevation-8);
+    overflow: hidden;
+}
+
+/* Constrain list height and make it scrollable */
+::deep .select-dropdown .mud-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* Hover feedback for items */
+::deep .select-dropdown .mud-list-item:hover {
+    background-color: rgba(var(--mud-palette-primary-rgb), 0.08);
+}
+
+
