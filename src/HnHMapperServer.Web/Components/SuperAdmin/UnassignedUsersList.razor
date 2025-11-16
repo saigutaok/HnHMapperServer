@@ -5,80 +5,82 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
-<MudStack Spacing="3">
-    <MudText Typo="Typo.h5">
-        <MudIcon Icon="@Icons.Material.Filled.PersonAddDisabled" Class="me-2" />
-        Unassigned Users
-    </MudText>
+<MudPaper Class="pa-4">
+    <MudStack Spacing="3">
+        <MudText Typo="Typo.h5">
+            <MudIcon Icon="@Icons.Material.Filled.PersonAddDisabled" Class="me-2" />
+            Unassigned Users
+        </MudText>
 
-    <MudAlert Severity="Severity.Info" Dense="true">
-        These users have registered but are not yet assigned to any tenant.
-        Assign them to a tenant to grant access.
-    </MudAlert>
-
-    @if (_loading)
-    {
-        <div class="d-flex justify-center align-center" style="min-height: 300px;">
-            <MudProgressCircular Indeterminate="true" Size="Size.Large" />
-        </div>
-    }
-    else if (_unassignedUsers.Count == 0)
-    {
-        <MudAlert Severity="Severity.Success" Dense="true" Class="mt-4">
-            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="me-2" />
-            No unassigned users. All registered users have been assigned to tenants.
+        <MudAlert Severity="Severity.Info" Dense="true">
+            These users have registered but are not yet assigned to any tenant.
+            Assign them to a tenant to grant access.
         </MudAlert>
-    }
-    else
-    {
-        <MudTable Items="_unassignedUsers"
-                  Hover="true"
-                  Breakpoint="Breakpoint.Sm"
-                  Dense="true"
-                  Elevation="0"
-                  Class="mt-2">
-            <HeaderContent>
-                <MudTh>Username</MudTh>
-                <MudTh>Registered</MudTh>
-                <MudTh Style="text-align: right;">Actions</MudTh>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd DataLabel="Username">
-                    <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Class="me-2" />
-                    @context.Username
-                </MudTd>
-                <MudTd DataLabel="Registered">
-                    @if (context.RegisteredAt.HasValue)
-                    {
-                        <MudText Typo="Typo.body2">@context.RegisteredAt.Value.ToString("yyyy-MM-dd HH:mm")</MudText>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">Unknown</MudText>
-                    }
-                </MudTd>
-                <MudTd DataLabel="Actions" Style="text-align: right;">
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               Size="Size.Small"
-                               OnClick="@(() => OpenAssignDialog(context))"
-                               StartIcon="@Icons.Material.Filled.PersonAdd">
-                        Assign to Tenant
-                    </MudButton>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    }
 
-    <MudButton Variant="Variant.Outlined"
-               Color="Color.Default"
-               OnClick="LoadUnassignedUsers"
-               StartIcon="@Icons.Material.Filled.Refresh"
-               Disabled="@_loading"
-               Class="mt-2">
-        Refresh
-    </MudButton>
-</MudStack>
+        @if (_loading)
+        {
+            <div class="d-flex justify-center align-center" style="min-height: 300px;">
+                <MudProgressCircular Indeterminate="true" Size="Size.Large" />
+            </div>
+        }
+        else if (_unassignedUsers.Count == 0)
+        {
+            <MudAlert Severity="Severity.Success" Dense="true" Class="mt-4">
+                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Class="me-2" />
+                No unassigned users. All registered users have been assigned to tenants.
+            </MudAlert>
+        }
+        else
+        {
+            <MudTable Items="_unassignedUsers"
+                      Hover="true"
+                      Breakpoint="Breakpoint.Sm"
+                      Dense="true"
+                      Elevation="0"
+                      Class="mt-2">
+                <HeaderContent>
+                    <MudTh>Username</MudTh>
+                    <MudTh>Registered</MudTh>
+                    <MudTh Style="text-align: right;">Actions</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Username">
+                        <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" Class="me-2" />
+                        @context.Username
+                    </MudTd>
+                    <MudTd DataLabel="Registered">
+                        @if (context.RegisteredAt.HasValue)
+                        {
+                            <MudText Typo="Typo.body2">@context.RegisteredAt.Value.ToString("yyyy-MM-dd HH:mm")</MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Unknown</MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Actions" Style="text-align: right;">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   OnClick="@(() => OpenAssignDialog(context))"
+                                   StartIcon="@Icons.Material.Filled.PersonAdd">
+                            Assign to Tenant
+                        </MudButton>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Default"
+                   OnClick="LoadUnassignedUsers"
+                   StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="@_loading"
+                   Class="mt-2">
+            Refresh
+        </MudButton>
+    </MudStack>
+</MudPaper>
 
 @code {
     private List<UnassignedUserDto> _unassignedUsers = new();

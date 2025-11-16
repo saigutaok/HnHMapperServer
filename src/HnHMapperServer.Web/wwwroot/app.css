@@ -704,3 +704,78 @@ div[class*="mud-tabs-toolbar"] {
 .map-view .mud-container {
     background-color: transparent !important;
 }
+
+/* ============================================
+   TYPOGRAPHY ENHANCEMENT - Readable Headings
+   ============================================ */
+
+/* MudBlazor Typography - All headings */
+.mud-typography,
+.mud-typography-h1,
+.mud-typography-h2,
+.mud-typography-h3,
+.mud-typography-h4,
+.mud-typography-h5,
+.mud-typography-h6,
+.mud-typography.mud-typography-h1,
+.mud-typography.mud-typography-h2,
+.mud-typography.mud-typography-h3,
+.mud-typography.mud-typography-h4,
+.mud-typography.mud-typography-h5,
+.mud-typography.mud-typography-h6 {
+    color: #ffffff !important;
+    text-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.5),
+        0 1px 2px rgba(0, 0, 0, 0.3),
+        1px 1px 3px rgba(0, 0, 0, 0.4) !important;
+    font-weight: 600 !important;
+}
+
+/* Standard HTML headings */
+h1, h2, h3, h4, h5, h6 {
+    color: #ffffff !important;
+    text-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.5),
+        0 1px 2px rgba(0, 0, 0, 0.3),
+        1px 1px 3px rgba(0, 0, 0, 0.4) !important;
+    font-weight: 600 !important;
+}
+
+/* MudText components with specific typography variants */
+.mud-text.mud-typography-h1,
+.mud-text.mud-typography-h2,
+.mud-text.mud-typography-h3,
+.mud-text.mud-typography-h4,
+.mud-text.mud-typography-h5,
+.mud-text.mud-typography-h6 {
+    color: #ffffff !important;
+    text-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.5),
+        0 1px 2px rgba(0, 0, 0, 0.3),
+        1px 1px 3px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Body text - Keep dark for readability on light backgrounds */
+.mud-typography-body1,
+.mud-typography-body2,
+.mud-typography.mud-typography-body1,
+.mud-typography.mud-typography-body2 {
+    color: #424242 !important;
+}
+
+/* Icons within headings - Match heading color */
+.mud-typography-h1 .mud-icon,
+.mud-typography-h2 .mud-icon,
+.mud-typography-h3 .mud-icon,
+.mud-typography-h4 .mud-icon,
+.mud-typography-h5 .mud-icon,
+.mud-typography-h6 .mud-icon,
+h1 .mud-icon,
+h2 .mud-icon,
+h3 .mud-icon,
+h4 .mud-icon,
+h5 .mud-icon,
+h6 .mud-icon {
+    color: #ffffff !important;
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5)) !important;
+}
