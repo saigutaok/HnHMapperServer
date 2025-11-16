@@ -121,21 +121,9 @@ public static class IdentityEndpoints
 		// If provided: user assigned to tenant with pending approval
 		// If not provided: user created but not assigned to any tenant (SuperAdmin assigns later)
 
-		// Password validation (8+ chars, uppercase, lowercase, digit, special char)
-		if (request.Password.Length < 8)
-			return Results.BadRequest(new { error = "Password must be at least 8 characters long" });
-
-		if (!System.Text.RegularExpressions.Regex.IsMatch(request.Password, @"[A-Z]"))
-			return Results.BadRequest(new { error = "Password must contain at least one uppercase letter" });
-
-		if (!System.Text.RegularExpressions.Regex.IsMatch(request.Password, @"[a-z]"))
-			return Results.BadRequest(new { error = "Password must contain at least one lowercase letter" });
-
-		if (!System.Text.RegularExpressions.Regex.IsMatch(request.Password, @"[0-9]"))
-			return Results.BadRequest(new { error = "Password must contain at least one digit" });
-
-		if (!System.Text.RegularExpressions.Regex.IsMatch(request.Password, @"[^a-zA-Z0-9]"))
-			return Results.BadRequest(new { error = "Password must contain at least one special character" });
+		// Password validation (6+ chars minimum)
+		if (request.Password.Length < 6)
+			return Results.BadRequest(new { error = "Password must be at least 6 characters long" });
 
 		// Validate invitation code (if provided)
 		bool hasInvitation = !string.IsNullOrWhiteSpace(request.InviteCode);
