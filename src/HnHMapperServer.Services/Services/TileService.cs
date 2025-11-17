@@ -227,6 +227,7 @@ public class TileService : ITileService
 
                 int skippedMissingSubTiles = 0;
                 int skippedNoNewerSubTiles = 0;
+                int zoomLevelRebuiltCount = 0;
 
                 if (zoomTiles.Count > 0)
                 {
@@ -338,6 +339,7 @@ public class TileService : ITileService
                         }
 
                         rebuiltCount++;
+                        zoomLevelRebuiltCount++;
                     }
                 }
 
@@ -345,8 +347,8 @@ public class TileService : ITileService
                 if (zoomTiles.Count > 0)
                 {
                     _logger.LogInformation(
-                        "Zoom {Zoom} summary: {Total} tiles checked, {Rebuilt} rebuilt, {SkippedMissing} skipped (missing sub-tiles), {SkippedNotNewer} skipped (no newer sub-tiles)",
-                        zoom, zoomTiles.Count, rebuiltCount, skippedMissingSubTiles, skippedNoNewerSubTiles);
+                        "Zoom {Zoom} summary: {Total} tiles checked, {Rebuilt} rebuilt this level, {SkippedMissing} skipped (missing sub-tiles), {SkippedNotNewer} skipped (no newer sub-tiles)",
+                        zoom, zoomTiles.Count, zoomLevelRebuiltCount, skippedMissingSubTiles, skippedNoNewerSubTiles);
                 }
             }
 

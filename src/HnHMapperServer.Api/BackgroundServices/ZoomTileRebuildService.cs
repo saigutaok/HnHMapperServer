@@ -34,7 +34,7 @@ public class ZoomTileRebuildService : BackgroundService
         }
 
         var intervalMinutes = _configuration.GetValue<int>("ZoomRebuild:IntervalMinutes", 5);
-        var maxTilesPerRun = _configuration.GetValue<int>("ZoomRebuild:MaxTilesPerRun", 100);
+        var maxTilesPerRun = _configuration.GetValue<int>("ZoomRebuild:MaxTilesPerRun", 500);
         var gridStorage = _configuration.GetValue<string>("GridStorage") ?? "map";
 
         _logger.LogInformation(
