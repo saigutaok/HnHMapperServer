@@ -28,6 +28,7 @@ public class MarkerModel
     public long MinReady { get; set; } = -1;
     public long MaxReady { get; set; } = -1;
     public bool Ready { get; set; }
+    public string? TimerText { get; set; } // Timer countdown text for display on map
 
     public string Type
     {

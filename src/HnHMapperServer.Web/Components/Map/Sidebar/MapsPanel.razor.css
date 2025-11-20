@@ -1,3 +1,14 @@
+/* Container with glassmorphism background for better visibility against map */
+.maps-panel-container {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
 /* Inline dropdown styling to keep the list anchored under the trigger */
 .select-wrapper {
     position: relative;

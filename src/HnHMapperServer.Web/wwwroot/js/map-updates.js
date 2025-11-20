@@ -40,45 +40,50 @@ export async function initializeSseUpdates(dotnetReference) {
  */
 function connectSse() {
     console.warn('[SSE] connectSse called - isConnecting:', isConnecting, 'eventSource:', eventSource);
-    
+
     if (isConnecting || eventSource) {
         console.warn('[SSE] Already connecting or connected, returning false');
         return false;
     }
-    
+
     isConnecting = true;
-    
+
     try {
         console.warn('[SSE] Creating new EventSource for /map/updates');
-        
+
         // EventSource automatically includes cookies for same-origin requests
         eventSource = new EventSource('/map/updates', {
             withCredentials: true
         });
-        
+
+        // Expose globally for notification-center.js to access
+        window.mapUpdates = window.mapUpdates || {};
+        window.mapUpdates.eventSource = eventSource;
+        console.warn('[SSE] EventSource exposed as window.mapUpdates.eventSource');
+
         console.warn('[SSE] EventSource created successfully');
         console.warn('[SSE] EventSource.url:', eventSource.url);
         console.warn('[SSE] EventSource.readyState:', eventSource.readyState, '(0=CONNECTING, 1=OPEN, 2=CLOSED)');
         console.warn('[SSE] EventSource.withCredentials:', eventSource.withCredentials);
-        
+
         // Wait a bit to see if readyState changes
         setTimeout(() => {
             console.warn('[SSE] EventSource readyState after 100ms:', eventSource?.readyState);
         }, 100);
-        
+
         setTimeout(() => {
             console.warn('[SSE] EventSource readyState after 500ms:', eventSource?.readyState);
         }, 500);
-        
+
         // Connection opened successfully
-        eventSource.onopen = function() {
+        eventSource.onopen = function () {
             console.warn('[SSE] ===== CONNECTED to /map/updates =====');
             isConnecting = false;
             reconnectAttempts = 0;
         };
-        
+
         // Default message handler (tile updates - batched every 5s)
-        eventSource.onmessage = function(event) {
+        eventSource.onmessage = function (event) {
             try {
                 const tiles = JSON.parse(event.data);
                 if (tiles && Array.isArray(tiles) && tiles.length > 0) {
@@ -88,9 +93,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing tile updates:', e);
             }
         };
-        
+
         // Map merge event
-        eventSource.addEventListener('merge', function(event) {
+        eventSource.addEventListener('merge', function (event) {
             try {
                 const merge = JSON.parse(event.data);
                 invokeDotNetSafe('OnSseMapMerge', merge);
@@ -98,9 +103,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing merge event:', e);
             }
         });
-        
+
         // Map metadata update event (name, hidden, priority)
-        eventSource.addEventListener('mapUpdate', function(event) {
+        eventSource.addEventListener('mapUpdate', function (event) {
             try {
                 const mapInfo = JSON.parse(event.data);
                 invokeDotNetSafe('OnSseMapUpdated', mapInfo);
@@ -108,9 +113,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing mapUpdate event:', e);
             }
         });
-        
+
         // Map deletion event
-        eventSource.addEventListener('mapDelete', function(event) {
+        eventSource.addEventListener('mapDelete', function (event) {
             try {
                 const deleteInfo = JSON.parse(event.data);
                 invokeDotNetSafe('OnSseMapDeleted', deleteInfo.Id);
@@ -118,9 +123,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing mapDelete event:', e);
             }
         });
-        
+
         // Map revision event (cache busting)
-        eventSource.addEventListener('mapRevision', function(event) {
+        eventSource.addEventListener('mapRevision', function (event) {
             try {
                 const revision = JSON.parse(event.data);
                 invokeDotNetSafe('OnSseMapRevision', revision.MapId, revision.Revision);
@@ -128,9 +133,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing mapRevision event:', e);
             }
         });
-        
+
         // Custom marker created event
-        eventSource.addEventListener('customMarkerCreated', function(event) {
+        eventSource.addEventListener('customMarkerCreated', function (event) {
             try {
                 const marker = JSON.parse(event.data);
                 invokeDotNetSafe('OnCustomMarkerCreated', marker);
@@ -138,9 +143,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing customMarkerCreated event:', e);
             }
         });
-        
+
         // Custom marker updated event
-        eventSource.addEventListener('customMarkerUpdated', function(event) {
+        eventSource.addEventListener('customMarkerUpdated', function (event) {
             try {
                 const marker = JSON.parse(event.data);
                 invokeDotNetSafe('OnCustomMarkerUpdated', marker);
@@ -148,9 +153,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing customMarkerUpdated event:', e);
             }
         });
-        
+
         // Custom marker deleted event
-        eventSource.addEventListener('customMarkerDeleted', function(event) {
+        eventSource.addEventListener('customMarkerDeleted', function (event) {
             try {
                 const deleteInfo = JSON.parse(event.data);
                 invokeDotNetSafe('OnCustomMarkerDeleted', deleteInfo);
@@ -160,7 +165,7 @@ function connectSse() {
         });
 
         // Ping created event
-        eventSource.addEventListener('pingCreated', function(event) {
+        eventSource.addEventListener('pingCreated', function (event) {
             try {
                 const ping = JSON.parse(event.data);
                 invokeDotNetSafe('OnPingCreated', ping);
@@ -170,7 +175,7 @@ function connectSse() {
         });
 
         // Ping deleted event
-        eventSource.addEventListener('pingDeleted', function(event) {
+        eventSource.addEventListener('pingDeleted', function (event) {
             try {
                 const deleteInfo = JSON.parse(event.data);
                 invokeDotNetSafe('OnPingDeleted', deleteInfo);
@@ -179,8 +184,48 @@ function connectSse() {
             }
         });
 
+        // Timer created event
+        eventSource.addEventListener('timerCreated', function (event) {
+            try {
+                const timer = JSON.parse(event.data);
+                invokeDotNetSafe('OnTimerCreated', timer);
+            } catch (e) {
+                console.error('[SSE] Error parsing timerCreated event:', e);
+            }
+        });
+
+        // Timer updated event
+        eventSource.addEventListener('timerUpdated', function (event) {
+            try {
+                const timer = JSON.parse(event.data);
+                invokeDotNetSafe('OnTimerUpdated', timer);
+            } catch (e) {
+                console.error('[SSE] Error parsing timerUpdated event:', e);
+            }
+        });
+
+        // Timer completed event
+        eventSource.addEventListener('timerCompleted', function (event) {
+            try {
+                const timer = JSON.parse(event.data);
+                invokeDotNetSafe('OnTimerCompleted', timer);
+            } catch (e) {
+                console.error('[SSE] Error parsing timerCompleted event:', e);
+            }
+        });
+
+        // Timer deleted event
+        eventSource.addEventListener('timerDeleted', function (event) {
+            try {
+                const deleteInfo = JSON.parse(event.data);
+                invokeDotNetSafe('OnTimerDeleted', deleteInfo.Id);
+            } catch (e) {
+                console.error('[SSE] Error parsing timerDeleted event:', e);
+            }
+        });
+
         // Characters snapshot event (initial full state)
-        eventSource.addEventListener('charactersSnapshot', function(event) {
+        eventSource.addEventListener('charactersSnapshot', function (event) {
             console.warn('[SSE] ===== charactersSnapshot event received =====');
             console.warn('[SSE] Raw event data:', event.data);
             try {
@@ -196,9 +241,9 @@ function connectSse() {
                 console.error('[SSE] Error parsing charactersSnapshot event:', e);
             }
         });
-        
+
         // Character delta event (incremental updates)
-        eventSource.addEventListener('characterDelta', function(event) {
+        eventSource.addEventListener('characterDelta', function (event) {
             console.warn('[SSE] ===== characterDelta event received =====');
             console.warn('[SSE] Raw delta data:', event.data);
             try {
@@ -209,23 +254,23 @@ function connectSse() {
                 console.error('[SSE] Error parsing characterDelta event:', e);
             }
         });
-        
+
         // Error handler - EventSource auto-reconnects, but we track attempts
-        eventSource.onerror = function(error) {
+        eventSource.onerror = function (error) {
             console.error('[SSE] ===== CONNECTION ERROR =====');
             console.error('[SSE] Error event:', error);
             console.error('[SSE] EventSource readyState:', eventSource?.readyState);
             console.error('[SSE] ReadyState meanings: 0=CONNECTING, 1=OPEN, 2=CLOSED');
             isConnecting = false;
-            
+
             // EventSource automatically reconnects; we just track for logging
             reconnectAttempts++;
             console.error('[SSE] Reconnect attempt:', reconnectAttempts);
-            
+
             // If auth fails (401), EventSource will keep retrying
             // The server-side fix ensures cookies work, so this should resolve
         };
-        
+
         return true;
     } catch (e) {
         console.error('[SSE] Failed to create EventSource:', e);
@@ -242,9 +287,9 @@ function scheduleManualReconnect() {
     const baseDelay = reconnectAttempts === 0 ? 1000 : Math.min(reconnectAttempts * 1000, MAX_RECONNECT_DELAY);
     const jitter = Math.random() * 200 - 100; // ±100ms jitter
     const delay = Math.max(500, baseDelay + jitter);
-    
+
     console.debug(`[SSE] Scheduling manual reconnect in ${delay}ms`);
-    
+
     setTimeout(() => {
         if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
             connectSse();
@@ -319,9 +364,9 @@ function invokeDotNetSafe(method, ...args) {
             // This handles "Cannot send data" errors that throw before returning a Promise
             if (invokeError && invokeError.message &&
                 (invokeError.message.includes('Cannot send data') ||
-                 invokeError.message.includes('not in the') ||
-                 invokeError.message.includes('Connected') ||
-                 invokeError.message.includes('No interop methods'))) {
+                    invokeError.message.includes('not in the') ||
+                    invokeError.message.includes('Connected') ||
+                    invokeError.message.includes('No interop methods'))) {
                 console.debug('[SSE] Circuit/SignalR not ready (sync error), retrying in 100ms:', method);
                 setTimeout(() => invokeDotNetSafe(method, ...args), 100);
                 return null;

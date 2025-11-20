@@ -19,6 +19,13 @@ public class UpdateNotificationService : IUpdateNotificationService
     private readonly ConcurrentBag<Channel<CharacterDeltaDto>> _characterDeltaChannels = new();
     private readonly ConcurrentBag<Channel<PingEventDto>> _pingCreatedChannels = new();
     private readonly ConcurrentBag<Channel<PingDeleteEventDto>> _pingDeletedChannels = new();
+    private readonly ConcurrentBag<Channel<NotificationEventDto>> _notificationCreatedChannels = new();
+    private readonly ConcurrentBag<Channel<int>> _notificationReadChannels = new();
+    private readonly ConcurrentBag<Channel<int>> _notificationDismissedChannels = new();
+    private readonly ConcurrentBag<Channel<TimerEventDto>> _timerCreatedChannels = new();
+    private readonly ConcurrentBag<Channel<TimerEventDto>> _timerUpdatedChannels = new();
+    private readonly ConcurrentBag<Channel<TimerEventDto>> _timerCompletedChannels = new();
+    private readonly ConcurrentBag<Channel<int>> _timerDeletedChannels = new();
 
     public ChannelReader<TileData> SubscribeToTileUpdates()
     {
@@ -383,6 +390,218 @@ public class UpdateNotificationService : IUpdateNotificationService
         }
 
         // Clean up dead channels
+        foreach (var deadChannel in channelsToRemove)
+        {
+            deadChannel.Writer.TryComplete();
+        }
+    }
+
+    // Notification events
+    public ChannelReader<NotificationEventDto> SubscribeToNotificationCreated()
+    {
+        var channel = Channel.CreateUnbounded<NotificationEventDto>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _notificationCreatedChannels.Add(channel);
+        return channel.Reader;
+    }
+
+    public ChannelReader<int> SubscribeToNotificationRead()
+    {
+        var channel = Channel.CreateUnbounded<int>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _notificationReadChannels.Add(channel);
+        return channel.Reader;
+    }
+
+    public ChannelReader<int> SubscribeToNotificationDismissed()
+    {
+        var channel = Channel.CreateUnbounded<int>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _notificationDismissedChannels.Add(channel);
+        return channel.Reader;
+    }
+
+    public void NotifyNotificationCreated(NotificationEventDto notification)
+    {
+        var channelsToRemove = new ConcurrentBag<Channel<NotificationEventDto>>();
+
+        foreach (var channel in _notificationCreatedChannels)
+        {
+            if (!channel.Writer.TryWrite(notification))
+            {
+                channelsToRemove.Add(channel);
+            }
+        }
+
+        foreach (var deadChannel in channelsToRemove)
+        {
+            deadChannel.Writer.TryComplete();
+        }
+    }
+
+    public void NotifyNotificationRead(int notificationId)
+    {
+        var channelsToRemove = new ConcurrentBag<Channel<int>>();
+
+        foreach (var channel in _notificationReadChannels)
+        {
+            if (!channel.Writer.TryWrite(notificationId))
+            {
+                channelsToRemove.Add(channel);
+            }
+        }
+
+        foreach (var deadChannel in channelsToRemove)
+        {
+            deadChannel.Writer.TryComplete();
+        }
+    }
+
+    public void NotifyNotificationDismissed(int notificationId)
+    {
+        var channelsToRemove = new ConcurrentBag<Channel<int>>();
+
+        foreach (var channel in _notificationDismissedChannels)
+        {
+            if (!channel.Writer.TryWrite(notificationId))
+            {
+                channelsToRemove.Add(channel);
+            }
+        }
+
+        foreach (var deadChannel in channelsToRemove)
+        {
+            deadChannel.Writer.TryComplete();
+        }
+    }
+
+    // Timer events
+    public ChannelReader<TimerEventDto> SubscribeToTimerCreated()
+    {
+        var channel = Channel.CreateUnbounded<TimerEventDto>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _timerCreatedChannels.Add(channel);
+        return channel.Reader;
+    }
+
+    public ChannelReader<TimerEventDto> SubscribeToTimerUpdated()
+    {
+        var channel = Channel.CreateUnbounded<TimerEventDto>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _timerUpdatedChannels.Add(channel);
+        return channel.Reader;
+    }
+
+    public ChannelReader<TimerEventDto> SubscribeToTimerCompleted()
+    {
+        var channel = Channel.CreateUnbounded<TimerEventDto>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _timerCompletedChannels.Add(channel);
+        return channel.Reader;
+    }
+
+    public ChannelReader<int> SubscribeToTimerDeleted()
+    {
+        var channel = Channel.CreateUnbounded<int>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false
+        });
+
+        _timerDeletedChannels.Add(channel);
+        return channel.Reader;
+    }
+
+    public void NotifyTimerCreated(TimerEventDto timer)
+    {
+        var channelsToRemove = new ConcurrentBag<Channel<TimerEventDto>>();
+
+        foreach (var channel in _timerCreatedChannels)
+        {
+            if (!channel.Writer.TryWrite(timer))
+            {
+                channelsToRemove.Add(channel);
+            }
+        }
+
+        foreach (var deadChannel in channelsToRemove)
+        {
+            deadChannel.Writer.TryComplete();
+        }
+    }
+
+    public void NotifyTimerUpdated(TimerEventDto timer)
+    {
+        var channelsToRemove = new ConcurrentBag<Channel<TimerEventDto>>();
+
+        foreach (var channel in _timerUpdatedChannels)
+        {
+            if (!channel.Writer.TryWrite(timer))
+            {
+                channelsToRemove.Add(channel);
+            }
+        }
+
+        foreach (var deadChannel in channelsToRemove)
+        {
+            deadChannel.Writer.TryComplete();
+        }
+    }
+
+    public void NotifyTimerCompleted(TimerEventDto timer)
+    {
+        var channelsToRemove = new ConcurrentBag<Channel<TimerEventDto>>();
+
+        foreach (var channel in _timerCompletedChannels)
+        {
+            if (!channel.Writer.TryWrite(timer))
+            {
+                channelsToRemove.Add(channel);
+            }
+        }
+
+        foreach (var deadChannel in channelsToRemove)
+        {
+            deadChannel.Writer.TryComplete();
+        }
+    }
+
+    public void NotifyTimerDeleted(int timerId)
+    {
+        var channelsToRemove = new ConcurrentBag<Channel<int>>();
+
+        foreach (var channel in _timerDeletedChannels)
+        {
+            if (!channel.Writer.TryWrite(timerId))
+            {
+                channelsToRemove.Add(channel);
+            }
+        }
+
         foreach (var deadChannel in channelsToRemove)
         {
             deadChannel.Writer.TryComplete();

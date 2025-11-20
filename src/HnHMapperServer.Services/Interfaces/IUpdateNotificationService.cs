@@ -115,4 +115,74 @@ public interface IUpdateNotificationService
     /// Notifies all subscribers of a ping deletion
     /// </summary>
     void NotifyPingDeleted(PingDeleteEventDto deleteEvent);
+
+    /// <summary>
+    /// Subscribes to notification creation events
+    /// </summary>
+    ChannelReader<NotificationEventDto> SubscribeToNotificationCreated();
+
+    /// <summary>
+    /// Subscribes to notification read events
+    /// </summary>
+    ChannelReader<int> SubscribeToNotificationRead();
+
+    /// <summary>
+    /// Subscribes to notification dismiss events
+    /// </summary>
+    ChannelReader<int> SubscribeToNotificationDismissed();
+
+    /// <summary>
+    /// Notifies all subscribers of a notification creation
+    /// </summary>
+    void NotifyNotificationCreated(NotificationEventDto notification);
+
+    /// <summary>
+    /// Notifies all subscribers of a notification being read
+    /// </summary>
+    void NotifyNotificationRead(int notificationId);
+
+    /// <summary>
+    /// Notifies all subscribers of a notification being dismissed
+    /// </summary>
+    void NotifyNotificationDismissed(int notificationId);
+
+    /// <summary>
+    /// Subscribes to timer creation events
+    /// </summary>
+    ChannelReader<TimerEventDto> SubscribeToTimerCreated();
+
+    /// <summary>
+    /// Subscribes to timer update events
+    /// </summary>
+    ChannelReader<TimerEventDto> SubscribeToTimerUpdated();
+
+    /// <summary>
+    /// Subscribes to timer completion events
+    /// </summary>
+    ChannelReader<TimerEventDto> SubscribeToTimerCompleted();
+
+    /// <summary>
+    /// Subscribes to timer deletion events
+    /// </summary>
+    ChannelReader<int> SubscribeToTimerDeleted();
+
+    /// <summary>
+    /// Notifies all subscribers of a timer creation
+    /// </summary>
+    void NotifyTimerCreated(TimerEventDto timer);
+
+    /// <summary>
+    /// Notifies all subscribers of a timer update
+    /// </summary>
+    void NotifyTimerUpdated(TimerEventDto timer);
+
+    /// <summary>
+    /// Notifies all subscribers of a timer completion
+    /// </summary>
+    void NotifyTimerCompleted(TimerEventDto timer);
+
+    /// <summary>
+    /// Notifies all subscribers of a timer deletion
+    /// </summary>
+    void NotifyTimerDeleted(int timerId);
 }

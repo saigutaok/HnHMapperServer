@@ -1,0 +1,118 @@
+/* ============================================
+   LAYERS PANEL STYLING
+   Component-specific styles for layer visibility toggles
+   ============================================ */
+
+/* Container with glassmorphism background for better visibility against map */
+.layers-container {
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* Base layer row styling */
+::deep .layer-row {
+    padding: 8px 12px;
+    border-radius: 8px;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+/* Hover effect for all layer rows */
+::deep .layer-row:hover {
+    background-color: rgba(100, 181, 246, 0.08);
+}
+
+/* Primary layer rows - more prominent with left border accent */
+::deep .layer-row-primary {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-left: 3px solid var(--mud-palette-primary);
+    padding-left: 9px; /* Adjusted for border */
+}
+
+/* Primary layer hover - more prominent */
+::deep .layer-row-primary:hover {
+    background-color: rgba(100, 181, 246, 0.15);
+    transform: translateX(2px);
+}
+
+/* Sub-toggle rows - indented and subdued */
+::deep .layer-row-sub {
+    margin-left: 32px;
+    padding: 6px 10px;
+    font-size: 0.95em;
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* Sub-toggle hover */
+::deep .layer-row-sub:hover {
+    background-color: rgba(100, 181, 246, 0.12);
+}
+
+/* Disabled state for sub-toggles when parent layer is off */
+::deep .layer-row-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+    background-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Disabled text styling */
+::deep .layer-row-disabled .mud-typography {
+    color: rgba(66, 66, 66, 0.5) !important;
+}
+
+/* Icon styling for layer labels */
+::deep .layer-icon {
+    color: var(--mud-palette-text-secondary);
+}
+
+/* Switch enhancement - ensure proper sizing for Medium switches */
+::deep .layer-switch {
+    flex-shrink: 0; /* Prevent switch from shrinking */
+}
+
+/* Override any global Small size issues for switches in this component */
+::deep .layer-switch .mud-switch-thumb {
+    /* Ensure thumb is properly sized */
+}
+
+/* Ensure switch track is visible on glassmorphism background */
+::deep .layer-switch .mud-switch-track {
+    opacity: 0.5;
+}
+
+/* Active switch track - more visible */
+::deep .layer-switch.mud-switch-checked .mud-switch-track {
+    opacity: 0.7;
+}
+
+/* Spacing improvements */
+::deep .mud-stack > *:not(:last-child) {
+    margin-bottom: 4px;
+}
+
+/* Divider styling - subtle in glassmorphism context */
+::deep .mud-divider {
+    margin: 8px 0 !important;
+    opacity: 0.3;
+}
+
+/* Improve switch visibility on hover */
+::deep .layer-row:hover .layer-switch {
+    transform: scale(1.05);
+    transition: transform 0.15s ease;
+}
+
+/* Active layer row (when switch is on) - subtle glow */
+::deep .layer-row:has(.mud-switch-checked) {
+    box-shadow: 0 0 8px rgba(100, 181, 246, 0.2);
+}
+
+/* Sub-toggle active state */
+::deep .layer-row-sub:has(.mud-switch-checked) {
+    box-shadow: 0 0 6px rgba(100, 181, 246, 0.15);
+    background-color: rgba(100, 181, 246, 0.1);
+}

@@ -1,5 +1,6 @@
 @using HnHMapperServer.Web.Models
 @using HnHMapperServer.Web.Components.Map.Sidebar
+@using HnHMapperServer.Core.DTOs
 @using MudBlazor
 
 <!-- Right-anchored drawer for all sidebar functionality -->
@@ -93,6 +94,25 @@
                         </MudStack>
                     </MudButton>
                 </MudItem>
+
+                <!-- Events Button -->
+                <MudItem xs="6">
+                    <MudButton OnClick="@(() => OnModeChanged.InvokeAsync(SidebarMode.Events))"
+                               Variant="@(CurrentMode == SidebarMode.Events ? Variant.Filled : Variant.Outlined)"
+                               Color="@(CurrentMode == SidebarMode.Events ? Color.Primary : Color.Default)"
+                               FullWidth="true"
+                               Size="Size.Large"
+                               Class="mode-button">
+                        <MudStack Spacing="1" AlignItems="AlignItems.Center" Style="width: 100%;">
+                            <MudIcon Icon="@Icons.Material.Filled.Timer" Size="Size.Medium" />
+                            <MudText Typo="Typo.caption" Style="font-weight: 500;">Events</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text"
+                                     Style="@(Timers.Count > 0 ? "" : "visibility: hidden;")">
+                                @(Timers.Count > 0 ? Timers.Count.ToString() : "0")
+                            </MudChip>
+                        </MudStack>
+                    </MudButton>
+                </MudItem>
             </MudGrid>
         </MudPaper>
     </MudDrawerHeader>
@@ -111,11 +131,14 @@
         {
             <MarkersPanel Markers="@Markers"
                           CustomMarkers="@CustomMarkers"
+                          Timers="@Timers"
                           Maps="@Maps"
                           OnMarkerSelected="@OnMarkerSelected"
                           OnCustomMarkerEdit="@OnCustomMarkerEdit"
                           OnCustomMarkerDelete="@OnCustomMarkerDelete"
-                          OnCustomMarkerSelected="@OnCustomMarkerSelected" />
+                          OnCustomMarkerSelected="@OnCustomMarkerSelected"
+                          OnSetTimerForMarker="@OnSetTimerForMarker"
+                          OnSetTimerForCustomMarker="@OnSetTimerForCustomMarker" />
         }
         else if (CurrentMode == SidebarMode.Layers)
         {
@@ -142,6 +165,12 @@
                        OnResetView="@OnResetView"
                        OnToggleGridCoordinates="@OnToggleGridCoordinates" />
         }
+        else if (CurrentMode == SidebarMode.Events)
+        {
+            <EventsPanel Timers="@Timers"
+                        OnMarkerSelected="@OnMarkerSelected"
+                        OnCustomMarkerSelected="@OnCustomMarkerSelected" />
+        }
     </div>
 </MudDrawer>
 
@@ -165,7 +194,12 @@
     /// List of all custom markers (player-created markers)
     /// </summary>
     [Parameter] public IReadOnlyList<CustomMarkerViewModel> CustomMarkers { get; set; } = Array.Empty<CustomMarkerViewModel>();
-    
+
+    /// <summary>
+    /// List of all active timers
+    /// </summary>
+    [Parameter] public IReadOnlyList<TimerDto> Timers { get; set; } = Array.Empty<TimerDto>();
+
     /// <summary>
     /// List of all active characters/players
     /// </summary>
@@ -236,6 +270,10 @@
     [Parameter] public EventCallback<CustomMarkerViewModel> OnCustomMarkerDelete { get; set; }
     [Parameter] public EventCallback<CustomMarkerViewModel> OnCustomMarkerSelected { get; set; }
     [Parameter] public EventCallback OnStopFollowing { get; set; }
+
+    // Event callbacks for timer actions
+    [Parameter] public EventCallback<MarkerModel> OnSetTimerForMarker { get; set; }
+    [Parameter] public EventCallback<CustomMarkerViewModel> OnSetTimerForCustomMarker { get; set; }
 }
 
 

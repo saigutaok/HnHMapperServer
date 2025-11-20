@@ -17,12 +17,25 @@
     box-shadow: 0 4px 8px rgba(0,0,0,0.1);
 }
 
+/* Make the drawer a flex container for proper height distribution */
+::deep .map-sidebar.mud-drawer {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* Header should not shrink */
+::deep .drawer-header {
+    flex-shrink: 0;
+}
+
 /* Drawer content area with scrolling and padding */
 .drawer-content {
     padding: 16px;
     overflow-y: auto;
     overflow-x: visible; /* Allow popovers to overflow horizontally */
-    height: calc(100vh - 200px); /* Account for drawer header with grid */
+    flex: 1; /* Take remaining vertical space */
+    min-height: 0; /* Critical for flex scroll behavior */
     position: relative; /* Create positioning context for popovers */
 }
 
@@ -63,11 +76,8 @@
     ::deep .mode-button {
         min-height: 56px;
     }
-    
-    /* Adjust drawer content height for compacted header + close button */
-    .drawer-content {
-        height: calc(100vh - 200px); /* Account for close button + smaller mode buttons */
-    }
+
+    /* Drawer content uses flexbox, no height adjustment needed */
 }
 
 /* Tablet-specific adjustments (601px - 960px) */

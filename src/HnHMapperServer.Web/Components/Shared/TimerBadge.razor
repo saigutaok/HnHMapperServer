@@ -1,0 +1,170 @@
+@using HnHMapperServer.Core.DTOs
+@inject IJSRuntime JS
+@implements IDisposable
+
+@if (Timer != null)
+{
+    @if (Timer.IsReady)
+    {
+        <MudChip T="string" Size="Size.Small"
+                 Color="Color.Success"
+                 Icon="@Icons.Material.Filled.CheckCircle"
+                 Variant="Variant.Filled">
+            Ready!
+        </MudChip>
+    }
+    else
+    {
+        <MudChip T="string" Size="Size.Small"
+                 Color="@GetTimerColor()"
+                 Icon="@GetTimerIcon()"
+                 Variant="Variant.Outlined">
+            @_displayText
+        </MudChip>
+    }
+}
+
+@code {
+    [Parameter]
+    public TimerDto? Timer { get; set; }
+
+    [Parameter]
+    public bool ShowSeconds { get; set; } = false;
+
+    private string _displayText = "";
+    private System.Threading.Timer? _updateTimer;
+
+    protected override void OnParametersSet()
+    {
+        if (Timer != null)
+        {
+            UpdateDisplayText();
+            StartUpdateTimer();
+        }
+    }
+
+    private void UpdateDisplayText()
+    {
+        if (Timer == null)
+        {
+            _displayText = "";
+            return;
+        }
+
+        // Calculate remaining time dynamically from ReadyAt
+        var remaining = (Timer.ReadyAt - DateTime.UtcNow).TotalSeconds;
+
+        if (remaining <= 0)
+        {
+            _displayText = "Ready!";
+            StopUpdateTimer();
+            return;
+        }
+
+        // Format remaining time
+        var span = TimeSpan.FromSeconds(remaining);
+
+        if (span.TotalDays >= 1)
+        {
+            // Show days and hours
+            _displayText = $"{(int)span.TotalDays}d {span.Hours}h";
+        }
+        else if (span.TotalHours >= 1)
+        {
+            // Show hours and minutes
+            _displayText = $"{(int)span.TotalHours}h {span.Minutes}m";
+        }
+        else if (span.TotalMinutes >= 1)
+        {
+            // Show minutes and optionally seconds
+            if (ShowSeconds || span.TotalMinutes <= 5)
+            {
+                _displayText = $"{span.Minutes}m {span.Seconds}s";
+            }
+            else
+            {
+                _displayText = $"{span.Minutes}m";
+            }
+        }
+        else
+        {
+            // Show seconds only
+            _displayText = $"{span.Seconds}s";
+        }
+    }
+
+    private Color GetTimerColor()
+    {
+        if (Timer == null)
+            return Color.Default;
+
+        // Calculate remaining time dynamically
+        var remaining = (Timer.ReadyAt - DateTime.UtcNow).TotalSeconds;
+
+        if (remaining <= 0)
+            return Color.Success;
+        if (remaining <= 300) // 5 minutes
+            return Color.Warning;
+        if (remaining <= 3600) // 1 hour
+            return Color.Info;
+
+        return Color.Default;
+    }
+
+    private string GetTimerIcon()
+    {
+        if (Timer == null)
+            return Icons.Material.Filled.Schedule;
+
+        // Calculate remaining time dynamically
+        var remaining = (Timer.ReadyAt - DateTime.UtcNow).TotalSeconds;
+
+        if (remaining <= 0)
+            return Icons.Material.Filled.CheckCircle;
+        if (remaining <= 300) // 5 minutes
+            return Icons.Material.Filled.AlarmOn;
+        if (remaining <= 3600) // 1 hour
+            return Icons.Material.Filled.Alarm;
+
+        return Icons.Material.Filled.Schedule;
+    }
+
+    private void StartUpdateTimer()
+    {
+        if (Timer == null)
+            return;
+
+        // Stop existing timer if any
+        StopUpdateTimer();
+
+        // Calculate remaining time dynamically
+        var remaining = (Timer.ReadyAt - DateTime.UtcNow).TotalSeconds;
+
+        if (remaining <= 0)
+            return;
+
+        // Update every second if showing seconds or time is less than 5 minutes
+        // Otherwise update every minute
+        var interval = (ShowSeconds || remaining <= 300) ? 1000 : 60000;
+
+        _updateTimer = new System.Threading.Timer(async _ =>
+        {
+            await InvokeAsync(() =>
+            {
+                UpdateDisplayText();
+                StateHasChanged();
+            });
+        }, null, interval, interval);
+    }
+
+    private void StopUpdateTimer()
+    {
+        _updateTimer?.Dispose();
+        _updateTimer = null;
+    }
+
+    public void Dispose()
+    {
+        StopUpdateTimer();
+    }
+}

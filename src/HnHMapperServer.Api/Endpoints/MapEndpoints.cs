@@ -422,6 +422,13 @@ public static class MapEndpoints
         var customMarkerDeleted = updateNotificationService.SubscribeToCustomMarkerDeleted();
         var pingCreated = updateNotificationService.SubscribeToPingCreated();
         var pingDeleted = updateNotificationService.SubscribeToPingDeleted();
+        var notificationCreated = updateNotificationService.SubscribeToNotificationCreated();
+        var notificationRead = updateNotificationService.SubscribeToNotificationRead();
+        var notificationDismissed = updateNotificationService.SubscribeToNotificationDismissed();
+        var timerCreated = updateNotificationService.SubscribeToTimerCreated();
+        var timerUpdated = updateNotificationService.SubscribeToTimerUpdated();
+        var timerCompleted = updateNotificationService.SubscribeToTimerCompleted();
+        var timerDeleted = updateNotificationService.SubscribeToTimerDeleted();
         var characterDeltas = hasPointerAuth ? updateNotificationService.SubscribeToCharacterDelta() : null;
 
         var tileBatch = new List<TileCacheDto>();
@@ -429,6 +436,12 @@ public static class MapEndpoints
         var characterDeltaBatch = new Dictionary<int, Character>(); // characterId -> latest state
         var characterDeletions = new HashSet<int>(); // characterIds to delete
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+
+        // Use CamelCase serialization for SSE events to match API behavior and client expectations
+        var jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
 
         logger.LogWarning("SSE: About to enter main event loop");
 
@@ -470,7 +483,7 @@ public static class MapEndpoints
                 {
                     if (merge.TenantId == tenantId)
                     {
-                        var mergeJson = JsonSerializer.Serialize(merge);
+                        var mergeJson = JsonSerializer.Serialize(merge, jsonOptions);
                         await context.Response.WriteAsync($"event: merge\ndata: {mergeJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -489,7 +502,7 @@ public static class MapEndpoints
                             Hidden = mapInfo.Hidden,
                             Priority = mapInfo.Priority
                         };
-                        var mapJson = JsonSerializer.Serialize(mapUpdateDto);
+                        var mapJson = JsonSerializer.Serialize(mapUpdateDto, jsonOptions);
                         await context.Response.WriteAsync($"event: mapUpdate\ndata: {mapJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -503,7 +516,7 @@ public static class MapEndpoints
                     if (tenantMapIds.Contains(mapId))
                     {
                         var deleteDto = new { Id = mapId };
-                        var deleteJson = JsonSerializer.Serialize(deleteDto);
+                        var deleteJson = JsonSerializer.Serialize(deleteDto, jsonOptions);
                         await context.Response.WriteAsync($"event: mapDelete\ndata: {deleteJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -516,7 +529,7 @@ public static class MapEndpoints
                     if (tenantMapIds.Contains(revision.MapId))
                     {
                         var revisionDto = new { MapId = revision.MapId, Revision = revision.Revision };
-                        var revisionJson = JsonSerializer.Serialize(revisionDto);
+                        var revisionJson = JsonSerializer.Serialize(revisionDto, jsonOptions);
                         await context.Response.WriteAsync($"event: mapRevision\ndata: {revisionJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -528,7 +541,7 @@ public static class MapEndpoints
                 {
                     if (markerCreated.TenantId == tenantId)
                     {
-                        var markerJson = JsonSerializer.Serialize(markerCreated);
+                        var markerJson = JsonSerializer.Serialize(markerCreated, jsonOptions);
                         await context.Response.WriteAsync($"event: customMarkerCreated\ndata: {markerJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -540,7 +553,7 @@ public static class MapEndpoints
                 {
                     if (markerUpdated.TenantId == tenantId)
                     {
-                        var markerJson = JsonSerializer.Serialize(markerUpdated);
+                        var markerJson = JsonSerializer.Serialize(markerUpdated, jsonOptions);
                         await context.Response.WriteAsync($"event: customMarkerUpdated\ndata: {markerJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -553,7 +566,7 @@ public static class MapEndpoints
                     if (markerDeleteEvent.TenantId == tenantId)
                     {
                         var deleteDto = new { Id = markerDeleteEvent.Id };
-                        var deleteJson = JsonSerializer.Serialize(deleteDto);
+                        var deleteJson = JsonSerializer.Serialize(deleteDto, jsonOptions);
                         await context.Response.WriteAsync($"event: customMarkerDeleted\ndata: {deleteJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -565,7 +578,7 @@ public static class MapEndpoints
                 {
                     if (ping.TenantId == tenantId)
                     {
-                        var pingJson = JsonSerializer.Serialize(ping);
+                        var pingJson = JsonSerializer.Serialize(ping, jsonOptions);
                         await context.Response.WriteAsync($"event: pingCreated\ndata: {pingJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
@@ -578,10 +591,88 @@ public static class MapEndpoints
                     if (pingDeleteEvent.TenantId == tenantId)
                     {
                         var deleteDto = new { Id = pingDeleteEvent.Id };
-                        var deleteJson = JsonSerializer.Serialize(deleteDto);
+                        var deleteJson = JsonSerializer.Serialize(deleteDto, jsonOptions);
                         await context.Response.WriteAsync($"event: pingDeleted\ndata: {deleteJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
+                }
+
+                // Check for notification creation events
+                // SECURITY: Filter by tenant and user to prevent cross-tenant notification visibility
+                while (notificationCreated.TryRead(out var notification))
+                {
+                    // Only send notifications that are for this tenant AND (for this user OR broadcast to all users)
+                    var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty;
+                    if (notification.TenantId == tenantId &&
+                        (notification.UserId == null || notification.UserId == userId))
+                    {
+                        var notificationJson = JsonSerializer.Serialize(notification, jsonOptions);
+                        await context.Response.WriteAsync($"event: notificationCreated\ndata: {notificationJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for notification read events
+                while (notificationRead.TryRead(out var notificationId))
+                {
+                    var readDto = new { Id = notificationId };
+                    var readJson = JsonSerializer.Serialize(readDto, jsonOptions);
+                    await context.Response.WriteAsync($"event: notificationRead\ndata: {readJson}\n\n");
+                    await context.Response.Body.FlushAsync();
+                }
+
+                // Check for notification dismissed events
+                while (notificationDismissed.TryRead(out var dismissedId))
+                {
+                    var dismissDto = new { Id = dismissedId };
+                    var dismissJson = JsonSerializer.Serialize(dismissDto, jsonOptions);
+                    await context.Response.WriteAsync($"event: notificationDismissed\ndata: {dismissJson}\n\n");
+                    await context.Response.Body.FlushAsync();
+                }
+
+                // Check for timer creation events
+                // SECURITY: Filter by tenant to prevent cross-tenant timer visibility
+                while (timerCreated.TryRead(out var timerEvent))
+                {
+                    if (timerEvent.TenantId == tenantId)
+                    {
+                        var timerJson = JsonSerializer.Serialize(timerEvent, jsonOptions);
+                        await context.Response.WriteAsync($"event: timerCreated\ndata: {timerJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for timer update events
+                // SECURITY: Filter by tenant to prevent cross-tenant timer visibility
+                while (timerUpdated.TryRead(out var timerUpdate))
+                {
+                    if (timerUpdate.TenantId == tenantId)
+                    {
+                        var timerJson = JsonSerializer.Serialize(timerUpdate, jsonOptions);
+                        await context.Response.WriteAsync($"event: timerUpdated\ndata: {timerJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for timer completion events
+                // SECURITY: Filter by tenant to prevent cross-tenant timer visibility
+                while (timerCompleted.TryRead(out var timerDone))
+                {
+                    if (timerDone.TenantId == tenantId)
+                    {
+                        var timerJson = JsonSerializer.Serialize(timerDone, jsonOptions);
+                        await context.Response.WriteAsync($"event: timerCompleted\ndata: {timerJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for timer deletion events
+                while (timerDeleted.TryRead(out var timerId))
+                {
+                    var deleteDto = new { Id = timerId };
+                    var deleteJson = JsonSerializer.Serialize(deleteDto, jsonOptions);
+                    await context.Response.WriteAsync($"event: timerDeleted\ndata: {deleteJson}\n\n");
+                    await context.Response.Body.FlushAsync();
                 }
 
                 // Check for character delta events (coalesce updates)

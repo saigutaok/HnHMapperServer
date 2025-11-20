@@ -1,0 +1,26 @@
+.notification-item {
+    transition: background-color 0.2s ease;
+}
+
+.notification-item:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+}
+
+.notification-item.unread {
+    background-color: rgba(33, 150, 243, 0.08);
+}
+
+.notification-item.unread:hover {
+    background-color: rgba(33, 150, 243, 0.12);
+}
+
+.notification-item.read {
+    opacity: 0.7;
+}
+
+.notification-header {
+    position: sticky;
+    top: 0;
+    background: white;
+    z-index: 1;
+}

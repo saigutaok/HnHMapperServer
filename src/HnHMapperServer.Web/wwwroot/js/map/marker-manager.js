@@ -80,11 +80,30 @@ export function addMarker(markerData, mapInstance) {
     let iconSize = isCustom && !isCave ? [36, 36] : [36, 36];
     let iconAnchor = isCustom && !isCave ? [11, 21] : [18, 18];
 
-    const icon = L.icon({
-        iconUrl: isCave ? 'gfx/hud/mmap/cave.png' : iconUrl,
-        iconSize: iconSize,
-        iconAnchor: iconAnchor
-    });
+    let icon;
+    if (markerData.timerText) {
+        // Use divIcon for markers with timers to allow HTML overlay
+        const actualIconUrl = isCave ? 'gfx/hud/mmap/cave.png' : iconUrl;
+        icon = L.divIcon({
+            html: `
+                <div class="marker-with-timer">
+                    <img src="${actualIconUrl}" class="marker-icon-img" style="width: ${iconSize[0]}px; height: ${iconSize[1]}px;" />
+                    <div class="marker-timer-text">${markerData.timerText}</div>
+                </div>
+            `,
+            iconSize: [iconSize[0], iconSize[1] + 12], // Add 12px for timer text
+            iconAnchor: [iconAnchor[0], iconAnchor[1] + 12],
+            popupAnchor: [0, -(iconAnchor[1] + 12)],
+            className: 'marker-timer-container'
+        });
+    } else {
+        // Use regular icon for markers without timers
+        icon = L.icon({
+            iconUrl: isCave ? 'gfx/hud/mmap/cave.png' : iconUrl,
+            iconSize: iconSize,
+            iconAnchor: iconAnchor
+        });
+    }
 
     const position = mapInstance.unproject([markerData.position.x, markerData.position.y], HnHMaxZoom);
     const marker = L.marker(position, { icon: icon, riseOnHover: true });
@@ -105,7 +124,10 @@ export function addMarker(markerData, mapInstance) {
 
     marker.on('contextmenu', (e) => {
         L.DomEvent.stopPropagation(e);
-        invokeDotNetSafe('JsOnMarkerContextMenu', markerData.id);
+        // Pass screen coordinates for proper context menu positioning
+        const screenX = Math.floor(e.containerPoint.x);
+        const screenY = Math.floor(e.containerPoint.y);
+        invokeDotNetSafe('JsOnMarkerContextMenu', markerData.id, screenX, screenY);
     });
 
     // Add to appropriate layer
@@ -137,6 +159,18 @@ export function updateMarker(markerId, markerData, mapInstance) {
         if (markerData.map !== currentMapId) {
             removeMarker(markerId, mapInstance);
             return false;
+        }
+
+        // Check if timer state has changed (added, removed, or text changed)
+        const oldTimerText = mark.data.timerText || null;
+        const newTimerText = markerData.timerText || null;
+
+        if (oldTimerText !== newTimerText) {
+            // Timer state changed - need to recreate marker with new icon
+            // Remove old marker and add new one with updated timer border/text
+            removeMarker(markerId, mapInstance);
+            addMarker(markerData, mapInstance);
+            return true;
         }
 
         // Update tooltip

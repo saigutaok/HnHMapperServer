@@ -76,6 +76,11 @@ public class CustomMarkerViewModel
     public bool CanEdit { get; set; }
 
     /// <summary>
+    /// Timer countdown text for display on map (e.g., "2h 15m", "45m")
+    /// </summary>
+    public string? TimerText { get; set; }
+
+    /// <summary>
     /// Get relative time string (e.g., "2 hours ago")
     /// </summary>
     public string RelativeTime => GetRelativeTime(PlacedAt);

@@ -39,6 +39,7 @@
                         Maps="@maps"
                         Markers="@allMarkers"
                         CustomMarkers="@allCustomMarkers"
+                        Timers="@allTimers"
                         Characters="@allCharacters"
                         CurrentMode="@sidebarMode"
                         OnModeChanged="@((mode) => SetMode(mode))"
@@ -65,7 +66,9 @@
                         OnCustomMarkerEdit="@ShowEditCustomMarkerDialog"
                         OnCustomMarkerDelete="@DeleteCustomMarkerAsync"
                         OnCustomMarkerSelected="@SelectCustomMarker"
-                        OnStopFollowing="@StopFollowing" />
+                        OnStopFollowing="@StopFollowing"
+                        OnSetTimerForMarker="@ShowSetTimerForMarkerDialog"
+                        OnSetTimerForCustomMarker="@ShowSetTimerForCustomMarkerDialog" />
 
             <MudMainContent>
                 <!-- Floating Menu Button - dynamically positioned based on sidebar state -->
@@ -110,18 +113,34 @@
                     </div>
                 }
 
-                <!-- Add Custom Marker Hint (floating, bottom-right, only when has markers permission) -->
+                <!-- Map Controls Hint (floating, bottom-right, collapsible) -->
                 @if (hasMarkersPermission)
                 {
-                    <MudPaper Elevation="3"
-                              Style="@GetAddMarkerButtonStyle()"
-                              Class="pulse-hint pa-2">
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                            <MudIcon Icon="@Icons.Material.Filled.AddLocation" Color="Color.Success" Size="Size.Medium" />
-                            <MudText Typo="Typo.caption" Color="Color.Success">
-                                Right-click for marker/ping options
-                            </MudText>
-                        </MudStack>
+                    <MudPaper Elevation="2"
+                              Style="@GetControlsHintStyle()"
+                              Class="controls-hint">
+                        <MudExpansionPanels @bind-Expanded="@controlsHintExpanded" Elevation="0" DisableGutters="true">
+                            <MudExpansionPanel Text="Map Controls" Dense="true">
+                                <TitleContent>
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                        <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+                                        <MudText Typo="Typo.body2" Style="font-weight: 500;">Map Controls</MudText>
+                                    </MudStack>
+                                </TitleContent>
+                                <ChildContent>
+                                    <MudStack Spacing="1" Class="pa-2">
+                                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                                            <MudIcon Icon="@Icons.Material.Filled.TouchApp" Size="Size.Small" />
+                                            <MudText Typo="Typo.body2">Right-click map to ping or create marker</MudText>
+                                        </MudStack>
+                                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                                            <MudIcon Icon="@Icons.Material.Filled.Timer" Size="Size.Small" />
+                                            <MudText Typo="Typo.body2">Right-click markers to set timers</MudText>
+                                        </MudStack>
+                                    </MudStack>
+                                </ChildContent>
+                            </MudExpansionPanel>
+                        </MudExpansionPanels>
                     </MudPaper>
                 }
 
@@ -134,6 +153,7 @@
                              OnContextMenu="@HandleContextMenu"
                              OnMarkerClicked="@HandleMarkerClicked"
                              OnMarkerContextMenu="@HandleMarkerContextMenu"
+                             OnCustomMarkerContextMenu="@HandleCustomMarkerContextMenu"
                              OnMapRightClick="@HandleMapRightClick"
                              OnMapInitialized="@HandleMapInitialized"
                              OnMapChanged="@HandleMapChanged" />
@@ -152,15 +172,27 @@
                              OnSetCoords="@HandleSetCoords" />
         }
 
-        <!-- Marker Context Menu (admin/writer only) -->
-        @if (state.Permissions.Contains("admin") || state.Permissions.Contains(Permission.Writer.ToClaimValue()))
+        <!-- Marker Context Menu -->
+        <MarkerContextMenu Visible="@showMarkerContextMenu"
+                           Left="@contextMenuX"
+                           Top="@contextMenuY"
+                           MarkerId="@contextMarkerId"
+                           HasTimer="@markerHasTimer"
+                           OnSetTimer="@(() => HandleSetTimerForMarker(contextMarkerId))"
+                           OnPing="@(() => HandlePingMarker(contextMarkerId))" />
+
+        <!-- Custom Marker Context Menu -->
+        @if (hasMarkersPermission)
         {
-            <MarkerContextMenu Visible="@showMarkerContextMenu"
-                               Left="@contextMenuX"
-                               Top="@contextMenuY"
-                               MarkerId="@contextMarkerId"
-                               OnHideMarker="@(() => HandleHideMarker(contextMarkerId))"
-                               OnDeleteMarker="@(() => HandleDeleteMarker(contextMarkerId))" />
+            <CustomMarkerContextMenu Visible="@showCustomMarkerContextMenu"
+                                     Left="@contextMenuX"
+                                     Top="@contextMenuY"
+                                     CustomMarkerId="@contextCustomMarkerId"
+                                     HasTimer="@customMarkerHasTimer"
+                                     OnSetTimer="@(() => HandleSetTimerForCustomMarker(contextCustomMarkerId))"
+                                     OnPing="@(() => HandlePingCustomMarker(contextCustomMarkerId))"
+                                     OnEdit="@(() => HandleEditCustomMarker(contextCustomMarkerId))"
+                                     OnDelete="@(() => HandleDeleteCustomMarker(contextCustomMarkerId))" />
         }
 
         <!-- Map Action Context Menu (for Create Marker/Ping) -->

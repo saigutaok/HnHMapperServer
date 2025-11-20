@@ -39,18 +39,26 @@
     }
 }
 
-/* Pulse hint for add marker button */
-.pulse-hint {
-    animation: pulse-hint-animation 2s ease-in-out infinite;
+/* Controls hint - subtle info panel without animation */
+.controls-hint {
+    background: rgba(255, 255, 255, 0.92) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 0, 0, 0.12) !important;
 }
 
-@keyframes pulse-hint-animation {
-    0%, 100% {
-        box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7);
-    }
-    50% {
-        box-shadow: 0 0 0 10px rgba(76, 175, 80, 0);
-    }
+/* Override MudExpansionPanel default styling within controls hint */
+.controls-hint .mud-expand-panel {
+    background: transparent !important;
+}
+
+.controls-hint .mud-expand-panel-header {
+    padding: 8px 12px !important;
+    min-height: unset !important;
+}
+
+.controls-hint .mud-expand-panel-content {
+    padding: 0 !important;
 }
 
 /* Leaflet container */

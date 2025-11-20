@@ -56,6 +56,12 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
     public DbSet<TenantInvitationEntity> TenantInvitations => Set<TenantInvitationEntity>();
     public DbSet<AuditLogEntity> AuditLogs => Set<AuditLogEntity>();
 
+    // Notification and timer tables
+    public DbSet<NotificationEntity> Notifications => Set<NotificationEntity>();
+    public DbSet<TimerEntity> Timers => Set<TimerEntity>();
+    public DbSet<NotificationPreferenceEntity> NotificationPreferences => Set<NotificationPreferenceEntity>();
+    public DbSet<TimerHistoryEntity> TimerHistory => Set<TimerHistoryEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -419,6 +425,134 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
             entity.HasIndex(e => new { e.EntityType, e.EntityId });
         });
 
+        // Notification and timer entity configurations
+        modelBuilder.Entity<NotificationEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TenantId).IsRequired();
+            entity.Property(e => e.Type).IsRequired();
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Message).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.Priority).IsRequired().HasDefaultValue("Normal");
+            entity.Property(e => e.IsRead).IsRequired().HasDefaultValue(false);
+            entity.Property(e => e.CreatedAt).IsRequired();
+
+            // Indexes for efficient queries
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.Type);
+            entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsRead });
+            entity.HasIndex(e => new { e.TenantId, e.CreatedAt });
+            entity.HasIndex(e => e.ExpiresAt);
+
+            // Foreign key to Tenants
+            entity.HasOne<TenantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Foreign key to AspNetUsers (nullable)
+            entity.HasOne<IdentityUser>()
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired(false);
+        });
+
+        modelBuilder.Entity<TimerEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TenantId).IsRequired();
+            entity.Property(e => e.UserId).IsRequired();
+            entity.Property(e => e.Type).IsRequired();
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).HasMaxLength(1000).IsRequired(false);
+            entity.Property(e => e.ReadyAt).IsRequired();
+            entity.Property(e => e.CreatedAt).IsRequired();
+            entity.Property(e => e.IsCompleted).IsRequired().HasDefaultValue(false);
+            entity.Property(e => e.NotificationSent).IsRequired().HasDefaultValue(false);
+            entity.Property(e => e.PreExpiryWarningSent).IsRequired().HasDefaultValue(false);
+
+            // Indexes for efficient queries
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.Type);
+            entity.HasIndex(e => e.MarkerId);
+            entity.HasIndex(e => e.CustomMarkerId);
+            entity.HasIndex(e => new { e.TenantId, e.IsCompleted, e.ReadyAt });
+            entity.HasIndex(e => new { e.TenantId, e.UserId, e.IsCompleted });
+
+            // Foreign key to Tenants
+            entity.HasOne<TenantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Foreign key to AspNetUsers
+            entity.HasOne<IdentityUser>()
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Foreign key to MarkerEntity (nullable)
+            entity.HasOne<MarkerEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.MarkerId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .IsRequired(false);
+
+            // Foreign key to CustomMarkerEntity (nullable)
+            entity.HasOne<CustomMarkerEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.CustomMarkerId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .IsRequired(false);
+        });
+
+        modelBuilder.Entity<NotificationPreferenceEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.UserId).IsRequired();
+            entity.Property(e => e.NotificationType).IsRequired();
+            entity.Property(e => e.Enabled).IsRequired().HasDefaultValue(true);
+            entity.Property(e => e.PlaySound).IsRequired().HasDefaultValue(false);
+            entity.Property(e => e.ShowBrowserNotification).IsRequired().HasDefaultValue(false);
+            entity.Property(e => e.PreExpiryWarningMinutes).IsRequired().HasDefaultValue(5);
+
+            // Unique constraint: one preference per user per notification type
+            entity.HasIndex(e => new { e.UserId, e.NotificationType }).IsUnique();
+
+            // Foreign key to AspNetUsers
+            entity.HasOne<IdentityUser>()
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TimerHistoryEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TimerId).IsRequired();
+            entity.Property(e => e.TenantId).IsRequired();
+            entity.Property(e => e.CompletedAt).IsRequired();
+            entity.Property(e => e.Type).IsRequired();
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+
+            // Indexes for efficient queries
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.TimerId);
+            entity.HasIndex(e => e.MarkerId);
+            entity.HasIndex(e => e.CustomMarkerId);
+            entity.HasIndex(e => new { e.TenantId, e.CompletedAt });
+            entity.HasIndex(e => new { e.TenantId, e.Type, e.CompletedAt });
+
+            // Foreign key to Tenants
+            entity.HasOne<TenantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         // Global query filters for automatic tenant isolation
         // These filters automatically add "WHERE TenantId = {currentTenantId}" to all queries
         // GetCurrentTenantId() is evaluated at query time (not model creation time)
@@ -446,6 +580,15 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
 
         modelBuilder.Entity<ConfigEntity>()
             .HasQueryFilter(c => c.TenantId == GetCurrentTenantId());
+
+        modelBuilder.Entity<NotificationEntity>()
+            .HasQueryFilter(n => n.TenantId == GetCurrentTenantId());
+
+        modelBuilder.Entity<TimerEntity>()
+            .HasQueryFilter(t => t.TenantId == GetCurrentTenantId());
+
+        modelBuilder.Entity<TimerHistoryEntity>()
+            .HasQueryFilter(t => t.TenantId == GetCurrentTenantId());
     }
 }
 
@@ -677,4 +820,239 @@ public sealed class PingEntity
     /// Tenant ID for multi-tenancy isolation
     /// </summary>
     public string TenantId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Represents a notification for a user in the system
+/// Notifications are shown in the notification center and can have actions
+/// </summary>
+public sealed class NotificationEntity
+{
+    /// <summary>
+    /// Primary key
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// Tenant ID for multi-tenancy isolation
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// User ID who should receive this notification
+    /// NULL means all users in the tenant
+    /// </summary>
+    public string? UserId { get; set; }
+
+    /// <summary>
+    /// Type of notification (MarkerTimerExpired, StandaloneTimerExpired, MapEvent, etc.)
+    /// </summary>
+    public string Type { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Notification title (displayed prominently)
+    /// </summary>
+    public string Title { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Notification message/body
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Action type when notification is clicked (NavigateToMarker, NavigateToMap, OpenUrl, NoAction)
+    /// </summary>
+    public string? ActionType { get; set; }
+
+    /// <summary>
+    /// JSON string with action parameters (e.g., {markerId: 123, mapId: 5})
+    /// </summary>
+    public string? ActionData { get; set; }
+
+    /// <summary>
+    /// Whether the user has read this notification
+    /// </summary>
+    public bool IsRead { get; set; }
+
+    /// <summary>
+    /// When the notification was created
+    /// </summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// When the notification expires and should be auto-deleted
+    /// NULL means never expires
+    /// </summary>
+    public DateTime? ExpiresAt { get; set; }
+
+    /// <summary>
+    /// Priority level (Low, Normal, High, Urgent)
+    /// </summary>
+    public string Priority { get; set; } = "Normal";
+}
+
+/// <summary>
+/// Represents a timer (either attached to a marker or standalone)
+/// Timers generate notifications when they expire
+/// </summary>
+public sealed class TimerEntity
+{
+    /// <summary>
+    /// Primary key
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// Tenant ID for multi-tenancy isolation
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// User ID who created this timer
+    /// </summary>
+    public string UserId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Type of timer (Marker, Standalone)
+    /// </summary>
+    public string Type { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Foreign key to MarkerEntity (NULL for standalone timers)
+    /// </summary>
+    public int? MarkerId { get; set; }
+
+    /// <summary>
+    /// Foreign key to CustomMarkerEntity (NULL for resource markers or standalone timers)
+    /// </summary>
+    public int? CustomMarkerId { get; set; }
+
+    /// <summary>
+    /// User-defined title for the timer
+    /// </summary>
+    public string Title { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional description
+    /// </summary>
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// When the timer will expire (UTC timestamp)
+    /// </summary>
+    public DateTime ReadyAt { get; set; }
+
+    /// <summary>
+    /// When the timer was created
+    /// </summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// Whether the timer has completed/expired
+    /// </summary>
+    public bool IsCompleted { get; set; }
+
+    /// <summary>
+    /// Whether the expiry notification has been sent
+    /// </summary>
+    public bool NotificationSent { get; set; }
+
+    /// <summary>
+    /// Whether the pre-expiry warning notification has been sent
+    /// </summary>
+    public bool PreExpiryWarningSent { get; set; }
+}
+
+/// <summary>
+/// User preferences for notifications
+/// Controls which notification types the user wants to receive and how
+/// </summary>
+public sealed class NotificationPreferenceEntity
+{
+    /// <summary>
+    /// Primary key
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// User ID
+    /// </summary>
+    public string UserId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Type of notification (MarkerTimer, StandaloneTimer, MapEvent, etc.)
+    /// </summary>
+    public string NotificationType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether this notification type is enabled
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Whether to play sound for this notification type
+    /// </summary>
+    public bool PlaySound { get; set; } = false;
+
+    /// <summary>
+    /// Whether to show browser push notification
+    /// </summary>
+    public bool ShowBrowserNotification { get; set; } = false;
+
+    /// <summary>
+    /// Minutes before timer expires to show pre-expiry warning (for timer notifications)
+    /// </summary>
+    public int PreExpiryWarningMinutes { get; set; } = 5;
+}
+
+/// <summary>
+/// Historical record of completed timers
+/// Used for learning resource respawn patterns
+/// </summary>
+public sealed class TimerHistoryEntity
+{
+    /// <summary>
+    /// Primary key
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// Original timer ID
+    /// </summary>
+    public int TimerId { get; set; }
+
+    /// <summary>
+    /// Tenant ID for multi-tenancy isolation
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// When the timer completed/expired
+    /// </summary>
+    public DateTime CompletedAt { get; set; }
+
+    /// <summary>
+    /// Actual duration in minutes from creation to completion
+    /// </summary>
+    public int? Duration { get; set; }
+
+    /// <summary>
+    /// Type of timer (Marker, Standalone)
+    /// </summary>
+    public string Type { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Marker ID if it was a marker timer
+    /// </summary>
+    public int? MarkerId { get; set; }
+
+    /// <summary>
+    /// Custom marker ID if it was a custom marker timer
+    /// </summary>
+    public int? CustomMarkerId { get; set; }
+
+    /// <summary>
+    /// Timer title (copied from TimerEntity)
+    /// </summary>
+    public string Title { get; set; } = string.Empty;
 }

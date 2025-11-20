@@ -1,0 +1,491 @@
+@using System.Net.Http.Json
+@using HnHMapperServer.Core.DTOs
+@using Microsoft.JSInterop
+@inject IHttpClientFactory HttpClientFactory
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@implements IAsyncDisposable
+
+<MudBadge Content="@_unreadCount"
+          Visible="@(_unreadCount > 0)"
+          Color="Color.Error"
+          Overlap="true"
+          Class="mx-2">
+    <MudMenu Icon="@Icons.Material.Filled.Notifications"
+             Color="Color.Inherit"
+             Dense="true"
+             AnchorOrigin="Origin.BottomRight"
+             TransformOrigin="Origin.TopRight"
+             MaxHeight="500"
+             @ref="_menu">
+        <div style="min-width: 350px; max-height: 500px; overflow-y: auto;">
+            @if (_notifications == null || _loading)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                <MudText Class="pa-4" Typo="Typo.body2" Color="Color.Secondary">
+                    Loading notifications...
+                </MudText>
+            }
+            else if (!_notifications.Any())
+            {
+                <MudText Class="pa-4" Typo="Typo.body2" Color="Color.Secondary" Align="Align.Center">
+                    No notifications
+                </MudText>
+            }
+            else
+            {
+                <div class="notification-header pa-2" style="border-bottom: 1px solid rgba(0,0,0,0.12); display: flex; justify-content: space-between; align-items: center;">
+                    <MudText Typo="Typo.subtitle2" Class="pl-2">Notifications</MudText>
+                    @if (_unreadCount > 0)
+                    {
+                        <MudButton Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Variant="Variant.Text"
+                                   OnClick="MarkAllAsRead">
+                            Mark all read
+                        </MudButton>
+                    }
+                </div>
+
+                @foreach (var notification in _notifications)
+                {
+                    <div class="notification-item @(notification.IsRead ? "read" : "unread")"
+                         style="border-bottom: 1px solid rgba(0,0,0,0.08); padding: 12px; cursor: pointer; transition: background-color 0.2s;"
+                         @onclick="() => HandleNotificationClick(notification)"
+                         @onmouseenter="@(() => _hoveredId = notification.Id)"
+                         @onmouseleave="@(() => _hoveredId = null)">
+
+                        <div style="display: flex; align-items: flex-start; gap: 8px;">
+                            <!-- Icon based on notification type -->
+                            <MudIcon Icon="@GetNotificationIcon(notification.Type)"
+                                     Color="@GetNotificationColor(notification.Priority)"
+                                     Size="Size.Small" />
+
+                            <div style="flex: 1; min-width: 0;">
+                                <MudText Typo="Typo.body2" Style="@GetNotificationTitleStyle(notification)">
+                                    @notification.Title
+                                </MudText>
+
+                                @if (!string.IsNullOrEmpty(notification.Message))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                                        @notification.Message
+                                    </MudText>
+                                }
+
+                                <MudText Typo="Typo.caption" Color="Color.Tertiary" Class="mt-1">
+                                    @FormatTimestamp(notification.CreatedAt)
+                                </MudText>
+                            </div>
+
+                            <!-- Dismiss button (visible on hover) -->
+                            @if (_hoveredId == notification.Id)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                               Size="Size.Small"
+                                               Color="Color.Default"
+                                               OnClick="@(async () => { await DismissNotification(notification.Id); })" />
+                            }
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    </MudMenu>
+</MudBadge>
+
+@code {
+    private MudMenu? _menu;
+    private List<NotificationDto>? _notifications;
+    private int _unreadCount = 0;
+    private bool _loading = false;
+    private int? _hoveredId = null;
+    private DotNetObjectReference<NotificationCenter>? _objRef;
+    private bool _isRendered = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _objRef = DotNetObjectReference.Create(this);
+        await LoadNotifications();
+        await LoadUnreadCount();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !_isRendered)
+        {
+            _isRendered = true;
+            try
+            {
+                // Initialize JavaScript interop for SSE notifications
+                // Must be called in OnAfterRenderAsync to avoid prerendering issues
+                await JS.InvokeVoidAsync("notificationCenter.init", _objRef);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to initialize notification center JS: {ex.Message}");
+            }
+        }
+    }
+
+    private async Task LoadNotifications()
+    {
+        _loading = true;
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            _notifications = await httpClient.GetFromJsonAsync<List<NotificationDto>>("/api/notifications?includeRead=false&limit=20");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading notifications: {ex.Message}");
+            _notifications = new List<NotificationDto>();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadUnreadCount()
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetFromJsonAsync<UnreadCountResponse>("/api/notifications/unread/count");
+            _unreadCount = response?.Count ?? 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading unread count: {ex.Message}");
+            _unreadCount = 0;
+        }
+    }
+
+    private async Task HandleNotificationClick(NotificationDto notification)
+    {
+        // Mark as read if unread
+        if (!notification.IsRead)
+        {
+            await MarkAsRead(notification.Id);
+        }
+
+        // Navigate based on action type
+        if (!string.IsNullOrEmpty(notification.ActionType))
+        {
+            switch (notification.ActionType)
+            {
+                case "NavigateToMarker":
+                    if (!string.IsNullOrEmpty(notification.ActionData))
+                    {
+                        // ActionData should be JSON with markerId and coordinates
+                        await NavigateToMarker(notification.ActionData);
+                    }
+                    break;
+
+                case "NavigateToCustomMarker":
+                    if (!string.IsNullOrEmpty(notification.ActionData))
+                    {
+                        await NavigateToCustomMarker(notification.ActionData);
+                    }
+                    break;
+
+                // Future action types can be added here
+            }
+        }
+
+        // Close the menu
+        _menu?.CloseMenuAsync();
+    }
+
+    private async Task MarkAsRead(int notificationId)
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            await httpClient.PutAsync($"/api/notifications/{notificationId}/read", null);
+
+            // Update local state
+            var notification = _notifications?.FirstOrDefault(n => n.Id == notificationId);
+            if (notification != null)
+            {
+                notification.IsRead = true;
+            }
+
+            _unreadCount = Math.Max(0, _unreadCount - 1);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error marking notification as read: {ex.Message}");
+        }
+    }
+
+    private async Task MarkAllAsRead()
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            await httpClient.PutAsync("/api/notifications/read-all", null);
+
+            // Update local state
+            if (_notifications != null)
+            {
+                foreach (var notification in _notifications)
+                {
+                    notification.IsRead = true;
+                }
+            }
+
+            _unreadCount = 0;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error marking all notifications as read: {ex.Message}");
+        }
+    }
+
+    private async Task DismissNotification(int notificationId)
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            await httpClient.DeleteAsync($"/api/notifications/{notificationId}");
+
+            // Remove from local state
+            var notification = _notifications?.FirstOrDefault(n => n.Id == notificationId);
+            if (notification != null)
+            {
+                if (!notification.IsRead)
+                {
+                    _unreadCount = Math.Max(0, _unreadCount - 1);
+                }
+                _notifications?.Remove(notification);
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error dismissing notification: {ex.Message}");
+        }
+    }
+
+    private async Task NavigateToMarker(string actionData)
+    {
+        try
+        {
+            // Parse actionData JSON to get marker coordinates
+            var data = System.Text.Json.JsonSerializer.Deserialize<MarkerActionData>(actionData);
+            if (data != null)
+            {
+                // Navigate to map with marker coordinates in query string
+                Navigation.NavigateTo($"/map?markerId={data.MarkerId}&x={data.X}&y={data.Y}&zoom=0");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error navigating to marker: {ex.Message}");
+            // Fallback: just go to map
+            Navigation.NavigateTo("/map");
+        }
+    }
+
+    private async Task NavigateToCustomMarker(string actionData)
+    {
+        try
+        {
+            var data = System.Text.Json.JsonSerializer.Deserialize<CustomMarkerActionData>(actionData);
+            if (data != null)
+            {
+                Navigation.NavigateTo($"/map?customMarkerId={data.CustomMarkerId}&x={data.X}&y={data.Y}&zoom=0");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error navigating to custom marker: {ex.Message}");
+            Navigation.NavigateTo("/map");
+        }
+    }
+
+    private string GetNotificationIcon(string type)
+    {
+        return type switch
+        {
+            "MarkerTimerExpired" => Icons.Material.Filled.AlarmOn,
+            "StandaloneTimerExpired" => Icons.Material.Filled.AlarmOn,
+            "TimerPreExpiryWarning" => Icons.Material.Filled.AlarmAdd,
+            "Info" => Icons.Material.Filled.Info,
+            "Warning" => Icons.Material.Filled.Warning,
+            "Error" => Icons.Material.Filled.Error,
+            "Success" => Icons.Material.Filled.CheckCircle,
+            _ => Icons.Material.Filled.Notifications
+        };
+    }
+
+    private Color GetNotificationColor(string priority)
+    {
+        return priority switch
+        {
+            "High" => Color.Error,
+            "Normal" => Color.Primary,
+            "Low" => Color.Default,
+            _ => Color.Default
+        };
+    }
+
+    private string GetNotificationTitleStyle(NotificationDto notification)
+    {
+        var fontWeight = notification.IsRead ? "400" : "600";
+        return $"font-weight: {fontWeight};";
+    }
+
+    private string FormatTimestamp(DateTime timestamp)
+    {
+        var elapsed = DateTime.UtcNow - timestamp;
+
+        if (elapsed.TotalMinutes < 1)
+            return "Just now";
+        if (elapsed.TotalMinutes < 60)
+            return $"{(int)elapsed.TotalMinutes}m ago";
+        if (elapsed.TotalHours < 24)
+            return $"{(int)elapsed.TotalHours}h ago";
+        if (elapsed.TotalDays < 7)
+            return $"{(int)elapsed.TotalDays}d ago";
+
+        return timestamp.ToLocalTime().ToString("MMM d");
+    }
+
+    /// <summary>
+    /// Called from JavaScript when a new notification arrives via SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnNotificationReceived(NotificationDto notification)
+    {
+        // Add to list
+        _notifications ??= new List<NotificationDto>();
+        _notifications.Insert(0, notification);
+
+        // Update unread count
+        if (!notification.IsRead)
+        {
+            _unreadCount++;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Called from JavaScript when a notification is marked as read via SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnNotificationRead(int notificationId)
+    {
+        var notification = _notifications?.FirstOrDefault(n => n.Id == notificationId);
+        if (notification != null && !notification.IsRead)
+        {
+            notification.IsRead = true;
+            _unreadCount = Math.Max(0, _unreadCount - 1);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Called from JavaScript when a notification is dismissed via SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnNotificationDismissed(int notificationId)
+    {
+        var notification = _notifications?.FirstOrDefault(n => n.Id == notificationId);
+        if (notification != null)
+        {
+            if (!notification.IsRead)
+            {
+                _unreadCount = Math.Max(0, _unreadCount - 1);
+            }
+            _notifications?.Remove(notification);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Called from JavaScript to show a snackbar/toast notification
+    /// </summary>
+    [JSInvokable]
+    public Task ShowSnackbarNotification(NotificationDto notification)
+    {
+        // Determine severity based on notification type
+        var severity = notification.Type switch
+        {
+            "MarkerTimerExpired" => Severity.Success,
+            "StandaloneTimerExpired" => Severity.Success,
+            "TimerPreExpiryWarning" => Severity.Warning,
+            "Error" => Severity.Error,
+            "Warning" => Severity.Warning,
+            "Success" => Severity.Success,
+            _ => Severity.Info
+        };
+
+        // Show snackbar with icon
+        var icon = GetNotificationIcon(notification.Type);
+        var message = string.IsNullOrWhiteSpace(notification.Message)
+            ? notification.Title
+            : $"{notification.Title}: {notification.Message}";
+
+        Snackbar.Add(message, severity, config =>
+        {
+            config.Icon = icon;
+            config.IconColor = GetNotificationColor(notification.Priority);
+            config.IconSize = Size.Medium;
+            config.VisibleStateDuration = notification.Priority == "High" ? 8000 : 5000; // 8s for high priority, 5s otherwise
+            config.ShowCloseIcon = true;
+            config.CloseAfterNavigation = false;
+        });
+
+        return Task.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        // Only call JS dispose if the component was actually rendered (not just prerendered)
+        if (_isRendered && _objRef != null)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("notificationCenter.dispose");
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit disconnected - this is expected during shutdown, ignore
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error disposing notification center: {ex.Message}");
+            }
+        }
+
+        _objRef?.Dispose();
+    }
+
+    // Helper classes for JSON deserialization
+    private class UnreadCountResponse
+    {
+        public int Count { get; set; }
+    }
+
+    private class MarkerActionData
+    {
+        public int MarkerId { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+    }
+
+    private class CustomMarkerActionData
+    {
+        public int CustomMarkerId { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+    }
+}

@@ -24,7 +24,12 @@ public enum SidebarMode
     /// <summary>
     /// Maps panel - controls for map selection, overlay, zoom, and grid coordinates
     /// </summary>
-    Maps
+    Maps,
+
+    /// <summary>
+    /// Events panel - shows active timers, timer history, and allows timer creation
+    /// </summary>
+    Events
 }
 
 

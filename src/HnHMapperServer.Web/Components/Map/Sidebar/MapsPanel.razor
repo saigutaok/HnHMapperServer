@@ -4,7 +4,8 @@
 <!-- Maps panel with map controls and selection -->
 <MudText Typo="Typo.h6" Class="mb-3">Map Controls</MudText>
 
-<MudStack Spacing="3">
+<div class="maps-panel-container">
+    <MudStack Spacing="3">
     <!-- Map Selector (inline dropdown to avoid popover issues) -->
     <div class="select-wrapper">
         <MudText Typo="Typo.body2" Class="mb-2">Current Map</MudText>
@@ -108,11 +109,12 @@
             <MudIcon Icon="@Icons.Material.Filled.GridOn" Size="Size.Medium" />
             <MudText Typo="Typo.body1">Grid Coordinates</MudText>
         </MudStack>
-        <MudSwitch Value="@State.ShowGridCoordinates" 
-                   ValueChanged="@((bool value) => OnToggleGridCoordinates.InvokeAsync(value))" 
+        <MudSwitch Value="@State.ShowGridCoordinates"
+                   ValueChanged="@((bool value) => OnToggleGridCoordinates.InvokeAsync(value))"
                    Color="Color.Primary" />
     </MudStack>
-</MudStack>
+    </MudStack>
+</div>
 
 @code {
     /// <summary>

@@ -6,6 +6,7 @@ using HnHMapperServer.Web.Components.Map.Sidebar;
 using HnHMapperServer.Web.Components.Map.Dialogs;
 using HnHMapperServer.Core.Enums;
 using HnHMapperServer.Core.Extensions;
+using HnHMapperServer.Core.DTOs;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.JSInterop;
@@ -81,6 +82,8 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private int markerUpdateRetryCount = 0;
     private const int MaxMarkerUpdateRetries = 3;
 
+    private List<TimerDto> allTimers = new();
+
     private IJSObjectReference? sseModule;
     private DotNetObjectReference<Map>? sseDotnetRef;
     private bool sseInitialized;
@@ -97,6 +100,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private bool isSidebarOpen = false;
     private SidebarMode sidebarMode = SidebarMode.Players;
     private bool hasActivePing = false;
+    private bool controlsHintExpanded = false; // Controls hint panel collapsed by default
 
     #endregion
 
@@ -104,11 +108,15 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
     private bool showContextMenu = false;
     private bool showMarkerContextMenu = false;
+    private bool showCustomMarkerContextMenu = false;
     private bool showMapActionMenu = false; // New: for Create Marker/Ping menu
     private int contextMenuX = 0;
     private int contextMenuY = 0;
     private (int x, int y) contextCoords;
     private int contextMarkerId = 0;
+    private int contextCustomMarkerId = 0;
+    private bool markerHasTimer = false; // Whether the context menu marker has an active timer
+    private bool customMarkerHasTimer = false; // Whether the context menu custom marker has an active timer
 
     // Map action menu context (for marker/ping creation)
     private int mapActionMapId = 0;
@@ -262,6 +270,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
                 await LoadCustomMarkersAsync();
             }
 
+            // Load timers
+            await LoadTimersAsync();
+
             // NOTE: Circuit event subscription moved to OnAfterRenderAsync to avoid race conditions during init
 
             // Subscribe to breakpoint changes (don't fire immediately to avoid illegal StateHasChanged during init)
@@ -402,6 +413,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
             // Load markers for current map
             var markersToLoad = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+
+            // Enrich markers with timer data before adding to map
+            EnrichMarkersWithTimerData(markersToLoad);
+
             foreach (var marker in markersToLoad)
             {
                 await mapView.AddMarkerAsync(marker);
@@ -499,6 +514,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
             await InvokeAsync(async () =>
             {
                 var result = MarkerState.UpdateFromApi(markers, MapNavigation.CurrentMapId);
+
+                // Enrich markers with timer data before updating
+                EnrichMarkersWithTimerData(result.AddedMarkers);
+                EnrichMarkersWithTimerData(result.UpdatedMarkers);
 
                 // Update map view
                 if (mapView != null)
@@ -672,6 +691,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         // Handle route parameters and set initial view position
         await InitializeViewFromUrlParametersAsync();
 
+        // Load active timers
+        await LoadTimersAsync();
+        StateHasChanged();
+
         // Load markers after positioning is complete
         // This is event-driven (triggered by Leaflet 'load') instead of render-cycle polling
         if (mapView != null && MapNavigation.CurrentMapId > 0)
@@ -723,10 +746,11 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
     private void HandleMapClick()
     {
-        if (showContextMenu || showMarkerContextMenu || showMapActionMenu)
+        if (showContextMenu || showMarkerContextMenu || showCustomMarkerContextMenu || showMapActionMenu)
         {
             showContextMenu = false;
             showMarkerContextMenu = false;
+            showCustomMarkerContextMenu = false;
             showMapActionMenu = false;
             StateHasChanged();
         }
@@ -754,11 +778,43 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         }
     }
 
-    private async Task HandleMarkerContextMenu(int markerId)
+    private async Task HandleMarkerContextMenu((int markerId, int screenX, int screenY) data)
     {
-        contextMarkerId = markerId;
+        contextMarkerId = data.markerId;
+        contextMenuX = data.screenX;
+        contextMenuY = data.screenY;
+
+        // Check if this marker has an active timer
+        var now = DateTime.UtcNow;
+        markerHasTimer = allTimers.Any(t =>
+            t.Type == "Marker" &&
+            t.MarkerId == data.markerId &&
+            !t.IsCompleted &&
+            t.ReadyAt > now);
+
         showMarkerContextMenu = true;
         showContextMenu = false;
+        showCustomMarkerContextMenu = false;
+        StateHasChanged();
+    }
+
+    private async Task HandleCustomMarkerContextMenu((int customMarkerId, int screenX, int screenY) data)
+    {
+        contextCustomMarkerId = data.customMarkerId;
+        contextMenuX = data.screenX;
+        contextMenuY = data.screenY;
+
+        // Check if this custom marker has an active timer
+        var now = DateTime.UtcNow;
+        customMarkerHasTimer = allTimers.Any(t =>
+            t.Type == "CustomMarker" &&
+            t.CustomMarkerId == data.customMarkerId &&
+            !t.IsCompleted &&
+            t.ReadyAt > now);
+
+        showCustomMarkerContextMenu = true;
+        showContextMenu = false;
+        showMarkerContextMenu = false;
         StateHasChanged();
     }
 
@@ -956,7 +1012,19 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private async Task HandleLayerToggle(Action action)
     {
         action();
+
+        // Sync LayerVisibility service back to state object for UI binding
+        state.ShowPlayers = LayerVisibility.ShowPlayers;
+        state.ShowPlayerTooltips = LayerVisibility.ShowPlayerTooltips;
+        state.ShowMarkers = LayerVisibility.ShowMarkers;
+        state.ShowCustomMarkers = LayerVisibility.ShowCustomMarkers;
+        state.ShowThingwalls = LayerVisibility.ShowThingwalls;
+        state.ShowThingwallTooltips = LayerVisibility.ShowThingwallTooltips;
+        state.ShowQuests = LayerVisibility.ShowQuests;
+        state.ShowQuestTooltips = LayerVisibility.ShowQuestTooltips;
+
         await SyncLayerVisibility();
+        StateHasChanged();  // Force UI re-render
     }
 
     private async Task HandleStateChanged()
@@ -996,57 +1064,116 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         Logger.LogInformation("Set coords for tile {X}, {Y}", contextCoords.x, contextCoords.y);
     }
 
-    private async Task HandleHideMarker(int markerId)
+    private async Task HandleSetTimerForMarker(int markerId)
     {
         showMarkerContextMenu = false;
-        try
+
+        // Find the marker in the current state
+        var marker = MarkerState.AllMarkers.FirstOrDefault(m => m.Id == markerId);
+        if (marker != null)
         {
-            var success = await MapData.HideMarkerAsync(markerId);
-            if (success)
-            {
-                if (mapView != null)
-                {
-                    await mapView.RemoveMarkerAsync(markerId);
-                }
-                MarkerState.RemoveMarker(markerId);
-                Snackbar.Add("Marker hidden successfully.", Severity.Success);
-            }
-            else
-            {
-                Snackbar.Add("Failed to hide marker. Check console for details.", Severity.Error);
-            }
+            await ShowSetTimerForMarkerDialog(marker);
         }
-        catch (Exception ex)
+        else
         {
-            Logger.LogError(ex, "Error hiding marker");
-            Snackbar.Add("Error hiding marker. Check console for details.", Severity.Error);
+            Logger.LogWarning("Marker {MarkerId} not found for timer creation", markerId);
+            Snackbar.Add("Marker not found", Severity.Warning);
         }
     }
 
-    private async Task HandleDeleteMarker(int markerId)
+    private async Task HandlePingMarker(int markerId)
     {
         showMarkerContextMenu = false;
-        try
+
+        // Find the marker
+        var marker = MarkerState.AllMarkers.FirstOrDefault(m => m.Id == markerId);
+        if (marker != null)
         {
-            var success = await MapData.DeleteMarkerAsync(markerId);
-            if (success)
-            {
-                if (mapView != null)
-                {
-                    await mapView.RemoveMarkerAsync(markerId);
-                }
-                MarkerState.RemoveMarker(markerId);
-                Snackbar.Add("Marker deleted successfully.", Severity.Success);
-            }
-            else
-            {
-                Snackbar.Add("Failed to delete marker. Check console for details.", Severity.Error);
-            }
+            // Calculate grid coordinates from absolute position
+            // Formula: absolute = local + grid * 100
+            // For negative positions, we need Math.Floor to get the correct grid coordinate
+            var coordX = (int)Math.Floor((double)marker.Position.X / 100);
+            var coordY = (int)Math.Floor((double)marker.Position.Y / 100);
+
+            // Local coordinates are the remainder, always in range [0, 100)
+            var x = marker.Position.X - (coordX * 100);
+            var y = marker.Position.Y - (coordY * 100);
+
+            Logger.LogWarning("Creating ping for marker '{MarkerName}' (ID={MarkerId}) - Map={MapId}, AbsolutePos=({AbsX},{AbsY}), CalculatedGrid=({CoordX},{CoordY}), LocalPos=({X},{Y})",
+                marker.Name, markerId, marker.Map, marker.Position.X, marker.Position.Y, coordX, coordY, x, y);
+
+            // Create ping at marker location
+            await JsCreatePing(marker.Map, coordX, coordY, x, y);
         }
-        catch (Exception ex)
+        else
         {
-            Logger.LogError(ex, "Error deleting marker");
-            Snackbar.Add("Error deleting marker. Check console for details.", Severity.Error);
+            Logger.LogWarning("Marker {MarkerId} not found for ping", markerId);
+            Snackbar.Add("Marker not found", Severity.Warning);
+        }
+    }
+
+    private async Task HandleSetTimerForCustomMarker(int customMarkerId)
+    {
+        showCustomMarkerContextMenu = false;
+
+        var customMarker = allCustomMarkers.FirstOrDefault(cm => cm.Id == customMarkerId);
+        if (customMarker != null)
+        {
+            await ShowSetTimerForCustomMarkerDialog(customMarker);
+        }
+        else
+        {
+            Logger.LogWarning("Custom marker {CustomMarkerId} not found for timer creation", customMarkerId);
+            Snackbar.Add("Custom marker not found", Severity.Warning);
+        }
+    }
+
+    private async Task HandlePingCustomMarker(int customMarkerId)
+    {
+        showCustomMarkerContextMenu = false;
+
+        var customMarker = allCustomMarkers.FirstOrDefault(cm => cm.Id == customMarkerId);
+        if (customMarker != null)
+        {
+            // Create ping at custom marker location
+            await JsCreatePing(customMarker.MapId, customMarker.CoordX, customMarker.CoordY, customMarker.X, customMarker.Y);
+        }
+        else
+        {
+            Logger.LogWarning("Custom marker {CustomMarkerId} not found for ping", customMarkerId);
+            Snackbar.Add("Custom marker not found", Severity.Warning);
+        }
+    }
+
+    private async Task HandleEditCustomMarker(int customMarkerId)
+    {
+        showCustomMarkerContextMenu = false;
+
+        var customMarker = allCustomMarkers.FirstOrDefault(cm => cm.Id == customMarkerId);
+        if (customMarker != null)
+        {
+            await ShowEditCustomMarkerDialog(customMarker);
+        }
+        else
+        {
+            Logger.LogWarning("Custom marker {CustomMarkerId} not found for edit", customMarkerId);
+            Snackbar.Add("Custom marker not found", Severity.Warning);
+        }
+    }
+
+    private async Task HandleDeleteCustomMarker(int customMarkerId)
+    {
+        showCustomMarkerContextMenu = false;
+
+        var customMarker = allCustomMarkers.FirstOrDefault(cm => cm.Id == customMarkerId);
+        if (customMarker != null)
+        {
+            await DeleteCustomMarkerAsync(customMarker);
+        }
+        else
+        {
+            Logger.LogWarning("Custom marker {CustomMarkerId} not found for deletion", customMarkerId);
+            Snackbar.Add("Custom marker not found", Severity.Warning);
         }
     }
 
@@ -1493,7 +1620,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
         await mapView.ClearAllMarkersAsync();
 
-        foreach (var marker in MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId))
+        var markers = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+        EnrichMarkersWithTimerData(markers);
+
+        foreach (var marker in markers)
         {
             await mapView.AddMarkerAsync(marker);
         }
@@ -1576,10 +1706,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         return $"position: fixed; top: 80px; right: {rightPosition}; z-index: 1400; transition: right 0.3s ease; visibility: {visibility};";
     }
 
-    private string GetAddMarkerButtonStyle()
+    private string GetControlsHintStyle()
     {
         var rightPosition = isSidebarOpen ? $"calc({DrawerWidthCss} + 16px)" : "16px";
-        return $"position: fixed; bottom: 16px; right: {rightPosition}; z-index: 1400; transition: right 0.3s ease;";
+        return $"position: fixed; bottom: 16px; right: {rightPosition}; z-index: 1400; transition: right 0.3s ease; max-width: 320px;";
     }
 
     #endregion
@@ -1613,13 +1743,42 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         }
     }
 
+    private async Task LoadTimersAsync()
+    {
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var response = await httpClient.GetAsync("/api/timers?includeCompleted=false&limit=1000");
+
+            if (response.IsSuccessStatusCode)
+            {
+                allTimers = await response.Content.ReadFromJsonAsync<List<TimerDto>>(CamelCaseJsonOptions)
+                    ?? new();
+                Logger.LogDebug("Loaded {Count} active timers", allTimers.Count);
+            }
+            else
+            {
+                Logger.LogWarning("Failed to load timers: {StatusCode}", response.StatusCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading timers");
+        }
+    }
+
     private async Task RenderCustomMarkersAsync()
     {
         if (mapView == null) return;
 
         await mapView.ClearAllCustomMarkersAsync();
 
-        foreach (var marker in CustomMarkerState.GetCustomMarkersForMap(MapNavigation.CurrentMapId))
+        var markersToRender = CustomMarkerState.GetCustomMarkersForMap(MapNavigation.CurrentMapId).ToList();
+
+        // Enrich markers with timer data before rendering
+        EnrichCustomMarkersWithTimerData(markersToRender);
+
+        foreach (var marker in markersToRender)
         {
             await mapView.AddCustomMarkerAsync(marker);
         }
@@ -1740,6 +1899,8 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
         if (marker.MapId == MapNavigation.CurrentMapId && LayerVisibility.ShowCustomMarkers && mapView != null)
         {
+            // Enrich marker with timer data before adding to map
+            EnrichCustomMarkersWithTimerData(new[] { marker });
             await mapView.AddCustomMarkerAsync(marker);
         }
 
@@ -1840,6 +2001,136 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         }
     }
 
+    private async Task ShowSetTimerForMarkerDialog(MarkerModel marker)
+    {
+        // Check if this marker already has an active timer
+        var existingTimer = allTimers.FirstOrDefault(t =>
+            t.Type == "Marker" &&
+            t.MarkerId == marker.Id &&
+            !t.IsCompleted);
+
+        DialogParameters parameters;
+        string dialogTitle;
+        string successMessage;
+
+        if (existingTimer != null)
+        {
+            // Edit mode - pass existing timer to dialog
+            parameters = new DialogParameters
+            {
+                { "Timer", existingTimer }
+            };
+            dialogTitle = "Edit Timer";
+            successMessage = "Timer updated successfully";
+        }
+        else
+        {
+            // Create mode - preset marker association
+            parameters = new DialogParameters
+            {
+                { "PresetType", "Marker" },
+                { "PresetMarkerId", marker.Id },
+                { "PresetTitle", $"Timer for {marker.Name}" }
+            };
+            dialogTitle = "Create Timer for Marker";
+            successMessage = "Timer created successfully";
+        }
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true
+        };
+
+        var dialog = await DialogService.ShowAsync<CreateTimerDialog>(
+            dialogTitle,
+            parameters,
+            options);
+
+        var result = await dialog.Result;
+        if (!result.Canceled)
+        {
+            await LoadTimersAsync();
+
+            // Re-enrich the marker with new timer data and update its visual representation
+            var updatedMarker = MarkerState.AllMarkers.FirstOrDefault(m => m.Id == marker.Id);
+            if (updatedMarker != null && mapView != null)
+            {
+                EnrichMarkersWithTimerData(new[] { updatedMarker });
+                await mapView.UpdateMarkerAsync(updatedMarker);
+            }
+
+            await InvokeAsync(StateHasChanged);
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+    }
+
+    private async Task ShowSetTimerForCustomMarkerDialog(CustomMarkerViewModel marker)
+    {
+        // Check if this custom marker already has an active timer
+        var existingTimer = allTimers.FirstOrDefault(t =>
+            t.Type == "CustomMarker" &&
+            t.CustomMarkerId == marker.Id &&
+            !t.IsCompleted);
+
+        DialogParameters parameters;
+        string dialogTitle;
+        string successMessage;
+
+        if (existingTimer != null)
+        {
+            // Edit mode - pass existing timer to dialog
+            parameters = new DialogParameters
+            {
+                { "Timer", existingTimer }
+            };
+            dialogTitle = "Edit Timer";
+            successMessage = "Timer updated successfully";
+        }
+        else
+        {
+            // Create mode - preset marker association
+            parameters = new DialogParameters
+            {
+                { "PresetType", "CustomMarker" },
+                { "PresetCustomMarkerId", marker.Id },
+                { "PresetTitle", $"Timer for {marker.Title}" }
+            };
+            dialogTitle = "Create Timer for Marker";
+            successMessage = "Timer created successfully";
+        }
+
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseButton = true
+        };
+
+        var dialog = await DialogService.ShowAsync<CreateTimerDialog>(
+            dialogTitle,
+            parameters,
+            options);
+
+        var result = await dialog.Result;
+        if (!result.Canceled)
+        {
+            await LoadTimersAsync();
+
+            // Re-enrich the custom marker with new timer data and update its visual representation
+            var updatedCustomMarker = allCustomMarkers.FirstOrDefault(cm => cm.Id == marker.Id);
+            if (updatedCustomMarker != null && mapView != null)
+            {
+                EnrichCustomMarkersWithTimerData(new[] { updatedCustomMarker });
+                await mapView.UpdateCustomMarkerAsync(updatedCustomMarker);
+            }
+
+            await InvokeAsync(StateHasChanged);
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+    }
+
     private async Task OnToggleCustomMarkers(bool show)
     {
         LayerVisibility.ShowCustomMarkers = show;
@@ -1902,6 +2193,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     {
         try
         {
+            Logger.LogWarning("JsCreatePing called: MapId={MapId}, Grid=({CoordX},{CoordY}), Local=({X},{Y})",
+                mapId, coordX, coordY, x, y);
+
             var client = HttpClientFactory.CreateClient("API");
 
             var pingDto = new
@@ -1917,7 +2211,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
             if (response.IsSuccessStatusCode)
             {
-                Logger.LogInformation("Ping created at ({CoordX},{CoordY},{X},{Y})", coordX, coordY, x, y);
+                Logger.LogInformation("Ping created successfully at Map={MapId}, Grid=({CoordX},{CoordY}), Local=({X},{Y})",
+                    mapId, coordX, coordY, x, y);
+                Snackbar.Add($"Ping created at ({coordX},{coordY})", Severity.Success);
                 // Ping will be added via SSE event
             }
             else if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -1926,14 +2222,17 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
             }
             else
             {
-                Logger.LogWarning("Failed to create ping: {StatusCode}", response.StatusCode);
-                Snackbar.Add("Failed to create ping", Severity.Error);
+                var responseBody = await response.Content.ReadAsStringAsync();
+                Logger.LogWarning("Failed to create ping: Status={StatusCode}, Response={ResponseBody}, Request=MapId={MapId} Grid=({CoordX},{CoordY}) Local=({X},{Y})",
+                    response.StatusCode, responseBody, mapId, coordX, coordY, x, y);
+                Snackbar.Add($"Failed to create ping: {response.StatusCode}", Severity.Error);
             }
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error creating ping");
-            Snackbar.Add("Error creating ping", Severity.Error);
+            Logger.LogError(ex, "Error creating ping at MapId={MapId}, Grid=({CoordX},{CoordY}), Local=({X},{Y})",
+                mapId, coordX, coordY, x, y);
+            Snackbar.Add("Error creating ping: " + ex.Message, Severity.Error);
         }
     }
 
@@ -2007,6 +2306,271 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         {
             Logger.LogError(ex, "Error handling ping deleted event");
         }
+    }
+
+    #endregion
+
+    #region Timer Helpers
+
+    /// <summary>
+    /// Handles timer created events from SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnTimerCreated(TimerDto timer)
+    {
+        try
+        {
+            Logger.LogInformation("OnTimerCreated: Received timer {TimerId} ({Title})", timer.Id, timer.Title);
+
+            // Create new list reference to force Blazor change detection
+            var newList = new List<TimerDto>(allTimers);
+
+            // Add if not exists
+            if (!newList.Any(t => t.Id == timer.Id))
+            {
+                newList.Add(timer);
+                allTimers = newList; // Update reference
+                Logger.LogInformation("OnTimerCreated: Added timer {TimerId} to list", timer.Id);
+            }
+            else
+            {
+                Logger.LogWarning("OnTimerCreated: Timer {TimerId} already exists, ignoring", timer.Id);
+            }
+
+            // Refresh markers/custom markers
+            await RefreshTimerVisualsAsync();
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error handling timer created event");
+        }
+    }
+
+    /// <summary>
+    /// Handles timer updated events from SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnTimerUpdated(TimerDto timer)
+    {
+        try
+        {
+            Logger.LogInformation("OnTimerUpdated: Received timer {TimerId} ({Title})", timer.Id, timer.Title);
+
+            // Create new list reference
+            var newList = new List<TimerDto>(allTimers);
+            var existing = newList.FirstOrDefault(t => t.Id == timer.Id);
+            
+            if (existing != null)
+            {
+                newList.Remove(existing);
+                newList.Add(timer);
+                allTimers = newList; // Update reference
+                Logger.LogInformation("OnTimerUpdated: Updated timer {TimerId} in list", timer.Id);
+            }
+            else
+            {
+                newList.Add(timer);
+                allTimers = newList; // Update reference
+                Logger.LogInformation("OnTimerUpdated: Added new timer {TimerId} (was missing)", timer.Id);
+            }
+            
+            // Refresh markers/custom markers
+            await RefreshTimerVisualsAsync();
+            
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error handling timer updated event");
+        }
+    }
+
+    /// <summary>
+    /// Handles timer completed events from SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnTimerCompleted(TimerDto timer)
+    {
+        try
+        {
+            Logger.LogInformation("OnTimerCompleted: Received timer {TimerId} ({Title})", timer.Id, timer.Title);
+
+            // Create new list reference
+            var newList = new List<TimerDto>(allTimers);
+            var existing = newList.FirstOrDefault(t => t.Id == timer.Id);
+            
+            if (existing != null)
+            {
+                // We need to replace the object to ensure property changes are detected if binding directly
+                newList.Remove(existing);
+                
+                // Update properties
+                existing.IsCompleted = true;
+                existing.CompletedAt = timer.CompletedAt;
+                
+                newList.Add(existing);
+                allTimers = newList; // Update reference
+                
+                Logger.LogInformation("OnTimerCompleted: Marked timer {TimerId} as completed", timer.Id);
+            }
+            
+            // Refresh markers/custom markers (timer should disappear from map)
+            await RefreshTimerVisualsAsync();
+            
+            await InvokeAsync(StateHasChanged);
+            
+            // Show notification
+            Snackbar.Add($"Timer '{timer.Title}' completed!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error handling timer completed event");
+        }
+    }
+
+    /// <summary>
+    /// Handles timer deleted events from SSE
+    /// </summary>
+    [JSInvokable]
+    public async Task OnTimerDeleted(int timerId)
+    {
+        try
+        {
+            Logger.LogInformation("OnTimerDeleted: Received timer {TimerId}", timerId);
+
+            // Create new list reference
+            var newList = new List<TimerDto>(allTimers);
+            var existing = newList.FirstOrDefault(t => t.Id == timerId);
+
+            if (existing != null)
+            {
+                newList.Remove(existing);
+                allTimers = newList; // Update reference
+                Logger.LogInformation("OnTimerDeleted: Removed timer {TimerId} from list", timerId);
+            }
+
+            // Refresh markers/custom markers (remove timer badge)
+            await RefreshTimerVisualsAsync();
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error handling timer deleted event");
+        }
+    }
+
+    private async Task RefreshTimerVisualsAsync()
+    {
+        // Update resource markers
+        if (LayerVisibility.ShowMarkers)
+        {
+            var markersToUpdate = MarkerState.AllMarkers.Where(m => 
+                allTimers.Any(t => t.Type == "Marker" && t.MarkerId == m.Id)).ToList();
+            
+            if (markersToUpdate.Any())
+            {
+                EnrichMarkersWithTimerData(markersToUpdate);
+                foreach (var marker in markersToUpdate)
+                {
+                    await mapView.UpdateMarkerAsync(marker);
+                }
+            }
+        }
+
+        // Update custom markers
+        if (LayerVisibility.ShowCustomMarkers)
+        {
+            var customMarkersToUpdate = allCustomMarkers.Where(cm => 
+                allTimers.Any(t => t.Type == "CustomMarker" && t.CustomMarkerId == cm.Id)).ToList();
+                
+            if (customMarkersToUpdate.Any())
+            {
+                EnrichCustomMarkersWithTimerData(customMarkersToUpdate);
+                foreach (var cm in customMarkersToUpdate)
+                {
+                    await mapView.UpdateCustomMarkerAsync(cm);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enriches markers with timer countdown text for display on map
+    /// </summary>
+    private void EnrichMarkersWithTimerData(IEnumerable<MarkerModel> markers)
+    {
+        var now = DateTime.UtcNow;
+
+        foreach (var marker in markers)
+        {
+            // Find timer for this marker
+            var timer = allTimers.FirstOrDefault(t =>
+                t.Type == "Marker" &&
+                t.MarkerId == marker.Id &&
+                !t.IsCompleted &&
+                t.ReadyAt > now);
+
+            if (timer != null)
+            {
+                var remaining = timer.ReadyAt - now;
+                marker.TimerText = FormatTimerCountdown(remaining);
+            }
+            else
+            {
+                marker.TimerText = null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enriches custom markers with timer countdown text for display on map
+    /// </summary>
+    private void EnrichCustomMarkersWithTimerData(IEnumerable<CustomMarkerViewModel> customMarkers)
+    {
+        var now = DateTime.UtcNow;
+
+        foreach (var customMarker in customMarkers)
+        {
+            // Find timer for this custom marker
+            var timer = allTimers.FirstOrDefault(t =>
+                t.Type == "CustomMarker" &&
+                t.CustomMarkerId == customMarker.Id &&
+                !t.IsCompleted &&
+                t.ReadyAt > now);
+
+            if (timer != null)
+            {
+                var remaining = timer.ReadyAt - now;
+                customMarker.TimerText = FormatTimerCountdown(remaining);
+            }
+            else
+            {
+                customMarker.TimerText = null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Formats a timespan into a compact countdown string (e.g., "2h 15m", "45m", "30s")
+    /// </summary>
+    private string FormatTimerCountdown(TimeSpan remaining)
+    {
+        if (remaining.TotalSeconds <= 0)
+            return "Ready!";
+
+        if (remaining.TotalDays >= 1)
+            return $"{(int)remaining.TotalDays}d {remaining.Hours}h";
+
+        if (remaining.TotalHours >= 1)
+            return $"{(int)remaining.TotalHours}h {remaining.Minutes}m";
+
+        if (remaining.TotalMinutes >= 1)
+            return $"{(int)remaining.TotalMinutes}m";
+
+        return $"{(int)remaining.TotalSeconds}s";
     }
 
     #endregion

@@ -1,0 +1,274 @@
+using HnHMapperServer.Core.DTOs;
+using HnHMapperServer.Infrastructure.Data;
+using HnHMapperServer.Services.Interfaces;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+namespace HnHMapperServer.Services.Services;
+
+/// <summary>
+/// Implementation of notification service.
+/// Manages creation, retrieval, and lifecycle of user notifications.
+/// </summary>
+public class NotificationService : INotificationService
+{
+    private readonly ApplicationDbContext _db;
+    private readonly ILogger<NotificationService> _logger;
+
+    public NotificationService(
+        ApplicationDbContext db,
+        ILogger<NotificationService> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Create a new notification.
+    /// </summary>
+    public async Task<NotificationDto> CreateAsync(CreateNotificationDto dto)
+    {
+        var entity = new NotificationEntity
+        {
+            TenantId = dto.TenantId,
+            UserId = dto.UserId,
+            Type = dto.Type,
+            Title = dto.Title,
+            Message = dto.Message,
+            ActionType = dto.ActionType,
+            ActionData = dto.ActionData,
+            Priority = dto.Priority,
+            IsRead = false,
+            CreatedAt = DateTime.UtcNow,
+            ExpiresAt = dto.ExpiresAt
+        };
+
+        _db.Notifications.Add(entity);
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation(
+            "Created notification {Id} of type {Type} for tenant {TenantId}",
+            entity.Id, entity.Type, entity.TenantId);
+
+        return MapToDto(entity);
+    }
+
+    /// <summary>
+    /// Get a notification by ID.
+    /// </summary>
+    public async Task<NotificationDto?> GetByIdAsync(int id)
+    {
+        var entity = await _db.Notifications.FindAsync(id);
+        return entity == null ? null : MapToDto(entity);
+    }
+
+    /// <summary>
+    /// Get notifications for a specific user.
+    /// </summary>
+    public async Task<List<NotificationDto>> GetUserNotificationsAsync(
+        string userId,
+        bool includeRead = true,
+        int limit = 50)
+    {
+        var query = _db.Notifications
+            .Where(n => n.UserId == userId || n.UserId == null)
+            .Where(n => n.ExpiresAt == null || n.ExpiresAt > DateTime.UtcNow);
+
+        if (!includeRead)
+        {
+            query = query.Where(n => !n.IsRead);
+        }
+
+        var entities = await query
+            .OrderByDescending(n => n.CreatedAt)
+            .Take(limit)
+            .ToListAsync();
+
+        return entities.Select(MapToDto).ToList();
+    }
+
+    /// <summary>
+    /// Query notifications with filtering.
+    /// </summary>
+    public async Task<List<NotificationDto>> QueryAsync(NotificationQuery query)
+    {
+        var dbQuery = _db.Notifications.AsQueryable();
+
+        // Apply filters
+        if (query.TenantId != null)
+            dbQuery = dbQuery.Where(n => n.TenantId == query.TenantId);
+
+        if (query.UserId != null)
+            dbQuery = dbQuery.Where(n => n.UserId == query.UserId || n.UserId == null);
+
+        if (query.Type != null)
+            dbQuery = dbQuery.Where(n => n.Type == query.Type);
+
+        if (query.IsRead != null)
+            dbQuery = dbQuery.Where(n => n.IsRead == query.IsRead.Value);
+
+        if (!query.IncludeExpired)
+            dbQuery = dbQuery.Where(n => n.ExpiresAt == null || n.ExpiresAt > DateTime.UtcNow);
+
+        // Execute query with pagination
+        var entities = await dbQuery
+            .OrderByDescending(n => n.CreatedAt)
+            .Skip(query.Offset)
+            .Take(query.Limit)
+            .ToListAsync();
+
+        return entities.Select(MapToDto).ToList();
+    }
+
+    /// <summary>
+    /// Mark a notification as read.
+    /// </summary>
+    public async Task<bool> MarkAsReadAsync(int id, string userId)
+    {
+        var entity = await _db.Notifications.FindAsync(id);
+        if (entity == null)
+            return false;
+
+        // Authorization check: user can only mark their own notifications as read
+        if (entity.UserId != null && entity.UserId != userId)
+            return false;
+
+        entity.IsRead = true;
+        await _db.SaveChangesAsync();
+
+        _logger.LogDebug(
+            "Marked notification {Id} as read for user {UserId}",
+            id, userId);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Mark all notifications as read for a user.
+    /// </summary>
+    public async Task<int> MarkAllAsReadAsync(string userId)
+    {
+        var count = await _db.Notifications
+            .Where(n => (n.UserId == userId || n.UserId == null) && !n.IsRead)
+            .ExecuteUpdateAsync(setters =>
+                setters.SetProperty(n => n.IsRead, true));
+
+        _logger.LogInformation(
+            "Marked {Count} notifications as read for user {UserId}",
+            count, userId);
+
+        return count;
+    }
+
+    /// <summary>
+    /// Dismiss (delete) a notification.
+    /// </summary>
+    public async Task<bool> DismissAsync(int id, string userId)
+    {
+        var entity = await _db.Notifications.FindAsync(id);
+        if (entity == null)
+            return false;
+
+        // Authorization check
+        if (entity.UserId != null && entity.UserId != userId)
+            return false;
+
+        _db.Notifications.Remove(entity);
+        await _db.SaveChangesAsync();
+
+        _logger.LogDebug(
+            "Dismissed notification {Id} for user {UserId}",
+            id, userId);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Delete all read notifications for a user.
+    /// </summary>
+    public async Task<int> DeleteAllReadAsync(string userId)
+    {
+        var count = await _db.Notifications
+            .Where(n => (n.UserId == userId || n.UserId == null) && n.IsRead)
+            .ExecuteDeleteAsync();
+
+        _logger.LogInformation(
+            "Deleted {Count} read notifications for user {UserId}",
+            count, userId);
+
+        return count;
+    }
+
+    /// <summary>
+    /// Delete expired notifications (background cleanup).
+    /// </summary>
+    public async Task<int> DeleteExpiredAsync()
+    {
+        var now = DateTime.UtcNow;
+        var count = await _db.Notifications
+            .Where(n => n.ExpiresAt != null && n.ExpiresAt < now)
+            .ExecuteDeleteAsync();
+
+        if (count > 0)
+        {
+            _logger.LogInformation(
+                "Deleted {Count} expired notifications",
+                count);
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Get unread notification count for a user.
+    /// </summary>
+    public async Task<int> GetUnreadCountAsync(string userId)
+    {
+        return await _db.Notifications
+            .Where(n => (n.UserId == userId || n.UserId == null) && !n.IsRead)
+            .Where(n => n.ExpiresAt == null || n.ExpiresAt > DateTime.UtcNow)
+            .CountAsync();
+    }
+
+    /// <summary>
+    /// Map NotificationEntity to NotificationDto.
+    /// </summary>
+    private static NotificationDto MapToDto(NotificationEntity entity)
+    {
+        return new NotificationDto
+        {
+            Id = entity.Id,
+            TenantId = entity.TenantId,
+            UserId = entity.UserId,
+            Type = entity.Type,
+            Title = entity.Title,
+            Message = entity.Message,
+            ActionType = entity.ActionType,
+            ActionData = entity.ActionData,
+            IsRead = entity.IsRead,
+            CreatedAt = entity.CreatedAt,
+            ExpiresAt = entity.ExpiresAt,
+            Priority = entity.Priority
+        };
+    }
+
+    /// <summary>
+    /// Map NotificationEntity to NotificationEventDto (for SSE).
+    /// </summary>
+    public static NotificationEventDto MapToEventDto(NotificationEntity entity)
+    {
+        return new NotificationEventDto
+        {
+            Id = entity.Id,
+            TenantId = entity.TenantId,
+            UserId = entity.UserId,
+            Type = entity.Type,
+            Title = entity.Title,
+            Message = entity.Message,
+            ActionType = entity.ActionType,
+            ActionData = entity.ActionData,
+            Priority = entity.Priority,
+            CreatedAt = entity.CreatedAt
+        };
+    }
+}

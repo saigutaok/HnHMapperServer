@@ -196,7 +196,7 @@ export async function initializeMap(mapElementId, dotnetReference) {
     // Initialize managers
     MarkerManager.setMarkerLayers(markerLayer, detailedMarkerLayer);
     MarkerManager.initializeMarkerManager(invokeDotNetSafe);
-    CustomMarkerManager.initializeCustomMarkerManager(customMarkerLayer);
+    CustomMarkerManager.initializeCustomMarkerManager(customMarkerLayer, invokeDotNetSafe);
     PingManager.initialize(mapInstance);
 
     // Keyboard event handler for Alt+M ping shortcut

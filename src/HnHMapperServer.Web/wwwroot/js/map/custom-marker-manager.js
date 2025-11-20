@@ -10,12 +10,19 @@ let customMarkerLayer = null;
 let customMarkersInitialized = false;
 let pendingCustomMarkers = [];
 
+// Safely invoke .NET methods from JS
+let invokeDotNetSafe = null;
+
 /**
  * Initialize custom marker manager
  * @param {object} layer - Custom marker layer group
+ * @param {function} invokeFunc - Function to invoke .NET methods
  */
-export function initializeCustomMarkerManager(layer) {
+export function initializeCustomMarkerManager(layer, invokeFunc) {
+    console.log('[CustomMarker] Initializing with invokeFunc:', typeof invokeFunc, invokeFunc);
     customMarkerLayer = layer;
+    invokeDotNetSafe = invokeFunc;
+    console.log('[CustomMarker] invokeDotNetSafe set to:', typeof invokeDotNetSafe, invokeDotNetSafe);
     customMarkersInitialized = true;
     flushCustomMarkerQueue();
 }
@@ -79,22 +86,45 @@ export function addCustomMarker(marker, mapInstance) {
         const latlng = mapInstance.unproject([absX, absY], HnHMaxZoom);
 
         const iconSrc = resolveIconPath(normalized.icon);
+        // Check for timerText in both camelCase and PascalCase (from C#)
+        const timerText = marker.timerText || marker.TimerText || null;
 
         // Create custom marker icon with wrapper for distinct styling
-        const iconHtml = `
-            <div class="custom-marker" data-marker-id="${normalized.id}">
-                <img src="${iconSrc}"
-                     alt="${normalized.title}"
-                     style="width: 32px; height: 32px; object-fit: contain; display: block;"
-                     onerror="this.onerror=null;this.src='/gfx/terobjs/mm/custom.png';" />
-            </div>
-        `;
+        let iconHtml, iconSize, iconAnchor;
+
+        if (timerText) {
+            // Custom marker with timer - add timer border and text
+            iconHtml = `
+                <div class="marker-with-timer">
+                    <img src="${iconSrc}"
+                         class="marker-icon-img"
+                         alt="${normalized.title}"
+                         style="width: 32px; height: 32px; object-fit: contain; display: block;"
+                         onerror="this.onerror=null;this.src='/gfx/terobjs/mm/custom.png';" />
+                    <div class="marker-timer-text">${timerText}</div>
+                </div>
+            `;
+            iconSize = [32, 44]; // Add 12px for timer text
+            iconAnchor = [16, 28]; // Adjust anchor for timer text
+        } else {
+            // Custom marker without timer - standard styling
+            iconHtml = `
+                <div class="custom-marker" data-marker-id="${normalized.id}">
+                    <img src="${iconSrc}"
+                         alt="${normalized.title}"
+                         style="width: 32px; height: 32px; object-fit: contain; display: block;"
+                         onerror="this.onerror=null;this.src='/gfx/terobjs/mm/custom.png';" />
+                </div>
+            `;
+            iconSize = [32, 32];
+            iconAnchor = [16, 16];
+        }
 
         const customIcon = L.divIcon({
             html: iconHtml,
-            className: '', // Empty to avoid default leaflet-div-icon class
-            iconSize: [32, 32],
-            iconAnchor: [16, 16]
+            className: timerText ? 'marker-timer-container' : '', // Empty to avoid default leaflet-div-icon class
+            iconSize: iconSize,
+            iconAnchor: iconAnchor
         });
 
         // Build popup HTML with full marker details
@@ -134,7 +164,16 @@ export function addCustomMarker(marker, mapInstance) {
 
         leafletMarker.on('contextmenu', (e) => {
             L.DomEvent.stopPropagation(e);
-            // Could add context menu for edit/delete here
+            // Pass screen coordinates for proper context menu positioning
+            const screenX = Math.floor(e.containerPoint.x);
+            const screenY = Math.floor(e.containerPoint.y);
+
+            // Guard check: ensure invokeDotNetSafe is available
+            if (typeof invokeDotNetSafe === 'function') {
+                invokeDotNetSafe('JsOnCustomMarkerContextMenu', normalized.id, screenX, screenY);
+            } else {
+                console.warn('[CustomMarker] invokeDotNetSafe not available for context menu on marker', normalized.id);
+            }
         });
 
         // Store and add to layer

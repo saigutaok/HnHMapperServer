@@ -114,6 +114,8 @@ builder.Services.AddScoped<ITenantContextAccessor, TenantContextAccessor>();
 builder.Services.AddScoped<IStorageQuotaService, StorageQuotaService>();
 builder.Services.AddScoped<ITenantFilePathService, TenantFilePathService>();
 builder.Services.AddScoped<IAuditService, AuditService>();  // Phase 6: Audit logging service
+builder.Services.AddScoped<INotificationService, NotificationService>();  // Notification system
+builder.Services.AddScoped<ITimerService, TimerService>();  // Timer system
 
 // Register TileCacheService (singleton to cache tiles in memory and prevent blocking SSE connections)
 builder.Services.AddSingleton<TileCacheService>();
@@ -145,6 +147,7 @@ builder.Services.AddHostedService<InvitationExpirationService>();
 builder.Services.AddHostedService<TenantStorageVerificationService>(); // Phase 4: Storage quota verification
 builder.Services.AddHostedService<PingCleanupService>(); // Ping cleanup service
 builder.Services.AddHostedService<ZoomTileRebuildService>(); // Zoom tile rebuild service
+builder.Services.AddHostedService<TimerCheckService>(); // Timer monitoring and notification service
 
 // Configure shared data protection for cookie sharing with Web
 var dataProtectionPath = Path.Combine(
@@ -685,6 +688,8 @@ app.MapClientEndpoints();
 app.MapMapEndpoints();
 app.MapCustomMarkerEndpoints();
 app.MapPingEndpoints();
+app.MapNotificationEndpoints(); // Notification system endpoints
+app.MapTimerEndpoints(); // Timer system endpoints
 app.MapInvitationEndpoints();
 app.MapTenantAdminEndpoints(); // Phase 5: Tenant admin endpoints (RBAC)
 app.MapMapAdminEndpoints(); // Map admin endpoints (tenant-scoped map management)

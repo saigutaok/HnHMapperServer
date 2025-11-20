@@ -722,21 +722,15 @@ div[class*="mud-tabs-toolbar"] {
 .mud-typography.mud-typography-h4,
 .mud-typography.mud-typography-h5,
 .mud-typography.mud-typography-h6 {
-    color: #ffffff !important;
-    text-shadow:
-        0 2px 4px rgba(0, 0, 0, 0.5),
-        0 1px 2px rgba(0, 0, 0, 0.3),
-        1px 1px 3px rgba(0, 0, 0, 0.4) !important;
+    color: #2c3e50 !important;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8) !important;
     font-weight: 600 !important;
 }
 
 /* Standard HTML headings */
 h1, h2, h3, h4, h5, h6 {
-    color: #ffffff !important;
-    text-shadow:
-        0 2px 4px rgba(0, 0, 0, 0.5),
-        0 1px 2px rgba(0, 0, 0, 0.3),
-        1px 1px 3px rgba(0, 0, 0, 0.4) !important;
+    color: #2c3e50 !important;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8) !important;
     font-weight: 600 !important;
 }
 
@@ -747,11 +741,8 @@ h1, h2, h3, h4, h5, h6 {
 .mud-text.mud-typography-h4,
 .mud-text.mud-typography-h5,
 .mud-text.mud-typography-h6 {
-    color: #ffffff !important;
-    text-shadow:
-        0 2px 4px rgba(0, 0, 0, 0.5),
-        0 1px 2px rgba(0, 0, 0, 0.3),
-        1px 1px 3px rgba(0, 0, 0, 0.4) !important;
+    color: #2c3e50 !important;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8) !important;
 }
 
 /* Body text - Keep dark for readability on light backgrounds, no shadows */
@@ -778,6 +769,115 @@ h3 .mud-icon,
 h4 .mud-icon,
 h5 .mud-icon,
 h6 .mud-icon {
-    color: #ffffff !important;
-    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5)) !important;
+    color: #2c3e50 !important;
+    filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.8)) !important;
+}
+
+/* ============================================
+   TABLE HEADER READABILITY - Dark Text
+   ============================================ */
+
+/* Table Header Text - Force dark color for readability on glass backgrounds */
+.mud-table thead .mud-table-cell,
+.mud-datagrid-header-cell,
+.mud-table-head .mud-table-cell,
+.mud-table thead th,
+.mud-datagrid-header-cell .mud-typography,
+.mud-table thead .mud-typography {
+    color: #2c3e50 !important;
+    font-weight: 600 !important;
+}
+
+/* ============================================
+   DIALOG TITLE READABILITY - Dark Text
+   ============================================ */
+
+/* Dialog titles - ensure readability on glass backgrounds */
+.mud-dialog-title,
+.mud-dialog .mud-typography-h5,
+.mud-dialog .mud-typography-h6,
+.mud-dialog-title .mud-typography,
+.mud-dialog-surface .mud-typography-h1,
+.mud-dialog-surface .mud-typography-h2,
+.mud-dialog-surface .mud-typography-h3,
+.mud-dialog-surface .mud-typography-h4,
+.mud-dialog-surface .mud-typography-h5,
+.mud-dialog-surface .mud-typography-h6 {
+    color: #2c3e50 !important;
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8) !important;
+}
+
+/* ============================================
+   TAB HEADER READABILITY - Dark Text
+   ============================================ */
+
+/* Tab headers and labels - dark text for glass backgrounds */
+.mud-tabs-toolbar .mud-tab,
+.mud-tab-label,
+.mud-tabs-toolbar .mud-typography,
+.mud-tab .mud-typography,
+.mud-tab-label-text {
+    color: #424242 !important;
+}
+
+/* Active/selected tab - make it stand out more */
+.mud-tab.mud-tab-active,
+.mud-tab.mud-tab-active .mud-typography {
+    color: #2c3e50 !important;
+    font-weight: 600 !important;
+}
+
+/* Marker Timer Overlay Styles */
+.marker-timer-container {
+    background: transparent !important;
+    border: none !important;
+}
+
+.marker-with-timer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+}
+
+.marker-icon-img {
+    display: block;
+    pointer-events: none;
+    border-radius: 6px;
+    border: 3px solid #ff9800;
+    box-shadow:
+        0 0 8px rgba(255, 152, 0, 0.6),
+        0 0 15px rgba(255, 152, 0, 0.4),
+        inset 0 0 8px rgba(255, 152, 0, 0.2);
+    animation: timer-pulse 2s ease-in-out infinite;
+}
+
+@keyframes timer-pulse {
+    0%, 100% {
+        box-shadow:
+            0 0 8px rgba(255, 152, 0, 0.6),
+            0 0 15px rgba(255, 152, 0, 0.4),
+            inset 0 0 8px rgba(255, 152, 0, 0.2);
+        border-color: #ff9800;
+    }
+    50% {
+        box-shadow:
+            0 0 12px rgba(255, 152, 0, 0.8),
+            0 0 20px rgba(255, 152, 0, 0.6),
+            inset 0 0 12px rgba(255, 152, 0, 0.3);
+        border-color: #ffb74d;
+    }
+}
+
+.marker-timer-text {
+    background-color: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 1px 4px;
+    border-radius: 3px;
+    white-space: nowrap;
+    text-align: center;
+    margin-top: 1px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
