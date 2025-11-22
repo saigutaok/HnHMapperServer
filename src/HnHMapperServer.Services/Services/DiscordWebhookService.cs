@@ -387,26 +387,20 @@ public class DiscordWebhookService : IDiscordWebhookService
 
                             if (grid != null)
                             {
-                                // Parse grid coordinates from GridId (format: "x_y")
-                                var gridCoords = marker.GridId.Split('_');
-                                if (gridCoords.Length == 2 &&
-                                    int.TryParse(gridCoords[0], out var gridX) &&
-                                    int.TryParse(gridCoords[1], out var gridY))
-                                {
-                                    var signedUrl = await _mapPreviewService.GenerateMarkerPreviewAsync(
-                                        grid.Map,
-                                        gridX,
-                                        gridY,
-                                        marker.PositionX,
-                                        marker.PositionY,
-                                        notification.TenantId,
-                                        webhookUrl);
+                                // Use grid coordinates directly from the Grids table
+                                var signedUrl = await _mapPreviewService.GenerateMarkerPreviewAsync(
+                                    grid.Map,
+                                    grid.CoordX,
+                                    grid.CoordY,
+                                    marker.PositionX,
+                                    marker.PositionY,
+                                    notification.TenantId,
+                                    webhookUrl);
 
-                                    previewUrl = $"{baseUrl}{signedUrl}";
+                                previewUrl = $"{baseUrl}{signedUrl}";
 
-                                    _logger.LogDebug("Added signed map preview to Discord notification {NotificationId}: {PreviewUrl}",
-                                        notification.Id, previewUrl);
-                                }
+                                _logger.LogDebug("Added signed map preview to Discord notification {NotificationId}: {PreviewUrl}",
+                                    notification.Id, previewUrl);
                             }
                         }
                     }
