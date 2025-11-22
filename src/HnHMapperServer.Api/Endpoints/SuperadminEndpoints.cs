@@ -1,6 +1,7 @@
 using HnHMapperServer.Core.DTOs;
 using HnHMapperServer.Core.Enums;
 using HnHMapperServer.Core.Extensions;
+using HnHMapperServer.Core.Interfaces;
 using HnHMapperServer.Infrastructure.Data;
 using HnHMapperServer.Services.Interfaces;
 using Microsoft.AspNetCore.Identity;
@@ -447,17 +448,32 @@ public static class SuperadminEndpoints
 
     /// <summary>
     /// GET /api/superadmin/config
-    /// Gets all system configuration values
+    /// Gets all global system configuration values
     /// </summary>
     private static async Task<IResult> GetAllConfig(
-        ApplicationDbContext db,
+        IConfigRepository configRepository,
         ILogger<Program> logger)
     {
         try
         {
-            var configValues = await db.Config
-                .IgnoreQueryFilters()
-                .ToDictionaryAsync(c => c.Key, c => c.Value);
+            // Get global config values (TenantId = "__global__")
+            // Currently we only manage these as global: prefix
+            // Other settings like title, defaultHide, mainMap are tenant-scoped
+            var configValues = new Dictionary<string, string>();
+
+            var prefix = await configRepository.GetGlobalValueAsync("prefix");
+            if (!string.IsNullOrEmpty(prefix))
+                configValues["prefix"] = prefix;
+
+            // For backwards compatibility, also include other config keys
+            // (These will eventually be moved to tenant-specific management)
+            var title = await configRepository.GetValueAsync("title");
+            if (!string.IsNullOrEmpty(title))
+                configValues["title"] = title;
+
+            var defaultHide = await configRepository.GetValueAsync("defaultHide");
+            if (!string.IsNullOrEmpty(defaultHide))
+                configValues["defaultHide"] = defaultHide;
 
             logger.LogInformation("SuperAdmin: Loaded {Count} config values", configValues.Count);
             return Results.Ok(configValues);
@@ -476,36 +492,30 @@ public static class SuperadminEndpoints
     private static async Task<IResult> UpdateConfig(
         string key,
         UpdateConfigDto dto,
-        ApplicationDbContext db,
+        IConfigRepository configRepository,
         IAuditService auditService,
         HttpContext context,
         ILogger<Program> logger)
     {
         try
         {
-            var config = await db.Config
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(c => c.Key == key);
+            // Determine if this is a global or tenant-scoped config key
+            var isGlobalKey = key == "prefix"; // Only prefix is global for now
 
-            var oldValue = config?.Value;
+            string? oldValue;
 
-            if (config == null)
+            if (isGlobalKey)
             {
-                // Create new config entry
-                config = new ConfigEntity
-                {
-                    Key = key,
-                    Value = dto.Value
-                };
-                db.Config.Add(config);
+                // Get old value and save as global
+                oldValue = await configRepository.GetGlobalValueAsync(key);
+                await configRepository.SetGlobalValueAsync(key, dto.Value);
             }
             else
             {
-                // Update existing config entry
-                config.Value = dto.Value;
+                // Get old value and save as tenant-scoped
+                oldValue = await configRepository.GetValueAsync(key);
+                await configRepository.SetValueAsync(key, dto.Value);
             }
-
-            await db.SaveChangesAsync();
 
             // Log audit entry
             var username = context.User.Identity?.Name ?? "Unknown";
@@ -520,7 +530,10 @@ public static class SuperadminEndpoints
                 NewValue = dto.Value
             });
 
-            logger.LogInformation("SuperAdmin: Updated config {Key} = {Value}", key, dto.Value);
+            logger.LogInformation("SuperAdmin: Updated {Scope} config {Key} = {Value}",
+                isGlobalKey ? "GLOBAL" : "tenant",
+                key,
+                dto.Value);
             return Results.Ok(new { key, value = dto.Value });
         }
         catch (Exception ex)

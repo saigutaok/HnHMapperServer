@@ -705,8 +705,8 @@ public static class TenantAdminEndpoints
             }
         }
 
-        // Get the prefix configuration for URL construction
-        var prefix = await configRepository.GetValueAsync("prefix") ?? string.Empty;
+        // Get the prefix configuration for URL construction (GLOBAL setting)
+        var prefix = await configRepository.GetGlobalValueAsync("prefix") ?? string.Empty;
 
         var tokens = await db.Tokens
             .Where(t => t.TenantId == tenantId)

@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using HnHMapperServer.Core.DTOs;
+using HnHMapperServer.Core.Interfaces;
 using HnHMapperServer.Services.DTOs;
 using HnHMapperServer.Services.Interfaces;
 using HnHMapperServer.Infrastructure.Data;
@@ -22,19 +23,22 @@ public class DiscordWebhookService : IDiscordWebhookService
     private readonly ApplicationDbContext _db;
     private readonly IConfiguration _configuration;
     private readonly IMapPreviewService _mapPreviewService;
+    private readonly IConfigRepository _configRepository;
 
     public DiscordWebhookService(
         IHttpClientFactory httpClientFactory,
         ILogger<DiscordWebhookService> logger,
         ApplicationDbContext db,
         IConfiguration configuration,
-        IMapPreviewService mapPreviewService)
+        IMapPreviewService mapPreviewService,
+        IConfigRepository configRepository)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _db = db;
         _configuration = configuration;
         _mapPreviewService = mapPreviewService;
+        _configRepository = configRepository;
     }
 
     /// <summary>
@@ -226,13 +230,10 @@ public class DiscordWebhookService : IDiscordWebhookService
             _ => notification.Type
         };
 
-        // Get base URL for map links from tenant's prefix configuration
-        // This is the same URL prefix shown in Admin → Config tab
-        // Query directly from Config table since we're in a background task without tenant context
-        var baseUrl = await _db.Config
-            .Where(c => c.Key == "prefix" && c.TenantId == notification.TenantId)
-            .Select(c => c.Value)
-            .FirstOrDefaultAsync() ?? "http://localhost";
+        // Get base URL for map links from GLOBAL prefix configuration
+        // The URL prefix is system-wide (not per-tenant) since it's the deployment URL
+        // Uses reserved TenantId "__global__" to store system settings
+        var baseUrl = await _configRepository.GetGlobalValueAsync("prefix") ?? "http://localhost";
         baseUrl = baseUrl.TrimEnd('/');
 
         // Detect localhost for development warning

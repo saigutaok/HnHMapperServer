@@ -310,8 +310,8 @@ public static class IdentityEndpoints
 			return Results.BadRequest(new { error = "Unable to determine your tenant. Please logout and login again." });
 		}
 
-		// Get the prefix configuration for URL construction
-		var prefix = await configRepository.GetValueAsync("prefix") ?? string.Empty;
+		// Get the prefix configuration for URL construction (GLOBAL setting)
+		var prefix = await configRepository.GetGlobalValueAsync("prefix") ?? string.Empty;
 
 		// Get permissions from TenantPermissions table
 		var tenantUser = await db.TenantUsers
@@ -366,8 +366,8 @@ public static class IdentityEndpoints
 			tokenName,
 			"upload");
 
-		// Get the prefix configuration for URL construction
-		var prefix = await configRepository.GetValueAsync("prefix") ?? string.Empty;
+		// Get the prefix configuration for URL construction (GLOBAL setting)
+		var prefix = await configRepository.GetGlobalValueAsync("prefix") ?? string.Empty;
 		var url = string.IsNullOrEmpty(prefix) ? $"/client/{fullToken}" : $"{prefix}/client/{fullToken}";
 		return Results.Ok(new { Success = true, Token = fullToken, Url = url });
 	}

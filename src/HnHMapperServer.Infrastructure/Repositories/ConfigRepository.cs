@@ -20,20 +20,21 @@ public class ConfigRepository : IConfigRepository
     {
         var config = new Config();
 
+        // Title is tenant-scoped
         var titleEntity = await _context.Config
             .FirstOrDefaultAsync(c => c.Key == "title");
         if (titleEntity != null)
             config.Title = titleEntity.Value;
 
-        var prefixEntity = await _context.Config
-            .FirstOrDefaultAsync(c => c.Key == "prefix");
-        if (prefixEntity != null)
-            config.Prefix = prefixEntity.Value;
+        // Prefix is GLOBAL (system-wide setting)
+        config.Prefix = await GetGlobalValueAsync("prefix") ?? string.Empty;
 
+        // DefaultHide is tenant-scoped
         var defaultHideEntity = await _context.Config
             .FirstOrDefaultAsync(c => c.Key == "defaultHide");
         config.DefaultHide = defaultHideEntity != null;
 
+        // MainMap is tenant-scoped
         var mainMapEntity = await _context.Config
             .FirstOrDefaultAsync(c => c.Key == "mainMap");
         if (mainMapEntity != null && int.TryParse(mainMapEntity.Value, out var mainMapId))
@@ -44,9 +45,13 @@ public class ConfigRepository : IConfigRepository
 
     public async Task SaveConfigAsync(Config config)
     {
+        // Title is tenant-scoped
         await SetValueAsync("title", config.Title);
-        await SetValueAsync("prefix", config.Prefix);
 
+        // Prefix is GLOBAL (system-wide setting)
+        await SetGlobalValueAsync("prefix", config.Prefix);
+
+        // DefaultHide is tenant-scoped
         if (config.DefaultHide)
         {
             await SetValueAsync("defaultHide", "true");
@@ -113,6 +118,50 @@ public class ConfigRepository : IConfigRepository
         if (entity != null)
         {
             _context.Config.Remove(entity);
+            await _context.SaveChangesAsync();
+        }
+    }
+
+    // Global config methods (not tenant-scoped)
+    // Use reserved TenantId "__global__" for system-wide settings
+
+    /// <summary>
+    /// Get a global configuration value (not tenant-scoped).
+    /// Used for system-wide settings like URL prefix.
+    /// </summary>
+    public async Task<string?> GetGlobalValueAsync(string key)
+    {
+        // Bypass tenant filter and explicitly query for global config
+        var entity = await _context.Config
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(c => c.Key == key && c.TenantId == "__global__");
+        return entity?.Value;
+    }
+
+    /// <summary>
+    /// Set a global configuration value (not tenant-scoped).
+    /// Used for system-wide settings like URL prefix.
+    /// </summary>
+    public async Task SetGlobalValueAsync(string key, string value)
+    {
+        // Bypass tenant filter and explicitly work with global config
+        var existing = await _context.Config
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(c => c.Key == key && c.TenantId == "__global__");
+
+        if (existing != null)
+        {
+            existing.Value = value;
+            await _context.SaveChangesAsync();
+        }
+        else
+        {
+            _context.Config.Add(new ConfigEntity
+            {
+                Key = key,
+                Value = value,
+                TenantId = "__global__"
+            });
             await _context.SaveChangesAsync();
         }
     }
