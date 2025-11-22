@@ -88,8 +88,9 @@ public class DiscordWebhookService : IDiscordWebhookService
             httpClient.Timeout = TimeSpan.FromSeconds(10);
 
             // Debug logging - log the exact object before serialization
-            _logger.LogDebug("Embed object: Title={Title}, Description={Description}, Color={Color}, HasFooter={HasFooter}, Timestamp={Timestamp}",
-                embed["title"], embed["description"], embed["color"], embed.ContainsKey("footer"), embed["timestamp"]);
+            _logger.LogInformation("Discord embed: HasUrl={HasUrl}, HasThumbnail={HasThumbnail}, HasImage={HasImage}, ImageUrl={ImageUrl}",
+                embed.ContainsKey("url"), embed.ContainsKey("thumbnail"), embed.ContainsKey("image"),
+                embed.ContainsKey("image") ? ((dynamic)embed["image"]).url : "none");
 
             // Use PostAsJsonAsync like the test webhook (which works)
             var response = await httpClient.PostAsJsonAsync(webhookUrl, payload);
