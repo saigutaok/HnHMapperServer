@@ -314,11 +314,11 @@ builder.Logging.AddConsole().Services.BuildServiceProvider()
     .GetRequiredService<ILogger<Program>>()
     .LogInformation("API HttpClient BaseAddress: {ApiBaseUrl}", apiBaseUrl);
 
+// Standard API client WITH resilience (retries, circuit breaker, timeouts)
+// Used for regular API calls that don't involve streaming uploads
 builder.Services.AddHttpClient("API", client =>
 {
     client.BaseAddress = new Uri(apiBaseUrl);
-    // Set a long timeout for large file uploads (.hmap files can be 500MB+)
-    client.Timeout = TimeSpan.FromMinutes(45);
 })
 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {
@@ -326,19 +326,21 @@ builder.Services.AddHttpClient("API", client =>
     UseCookies = false
 })
 .AddHttpMessageHandler<HnHMapperServer.Web.Services.AuthenticationDelegatingHandler>()
-// Configure custom resilience options for file uploads
-// The default Aspire StandardResilienceHandler has a 10s attempt timeout which is too short
-.AddStandardResilienceHandler(options =>
+.AddStandardResilienceHandler();
+
+// File upload client WITHOUT resilience - streams cannot be retried
+// Used only for .hmap imports and other large file uploads
+builder.Services.AddHttpClient("APIUpload", client =>
 {
-    // Increase attempt timeout for large file uploads (45 minutes)
-    options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(45);
-    // Increase total request timeout (50 minutes to allow for processing)
-    options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(50);
-    // Minimize retries - streams can't be re-read (must be at least 1)
-    options.Retry.MaxRetryAttempts = 1;
-    // Circuit breaker sampling duration must be at least 2x attempt timeout
-    options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(95);
-});
+    client.BaseAddress = new Uri(apiBaseUrl);
+    client.Timeout = TimeSpan.FromMinutes(45);
+})
+.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseCookies = false
+})
+.AddHttpMessageHandler<HnHMapperServer.Web.Services.AuthenticationDelegatingHandler>();
 
 // Add cascading authentication state
 builder.Services.AddCascadingAuthenticationState();
