@@ -68,7 +68,9 @@
                         OnCustomMarkerSelected="@SelectCustomMarker"
                         OnStopFollowing="@StopFollowing"
                         OnSetTimerForMarker="@ShowSetTimerForMarkerDialog"
-                        OnSetTimerForCustomMarker="@ShowSetTimerForCustomMarkerDialog" />
+                        OnSetTimerForCustomMarker="@ShowSetTimerForCustomMarkerDialog"
+                        HiddenMarkerGroups="@hiddenMarkerGroups"
+                        OnMarkerGroupVisibilityChanged="@HandleMarkerGroupVisibilityChanged" />
 
             <MudMainContent>
                 <!-- Floating Menu Button - dynamically positioned based on sidebar state -->

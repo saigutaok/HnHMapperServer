@@ -59,6 +59,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     [Inject] private CustomMarkerStateService CustomMarkerState { get; set; } = default!;
     [Inject] private MapNavigationService MapNavigation { get; set; } = default!;
     [Inject] private LayerVisibilityService LayerVisibility { get; set; } = default!;
+    [Inject] private SafeJsInterop SafeJs { get; set; } = default!;
 
     #endregion
 
@@ -92,6 +93,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     // Locks to prevent race conditions during initialization
     private readonly SemaphoreSlim sseCallbackLock = new SemaphoreSlim(1, 1);
     private readonly SemaphoreSlim customMarkerLock = new SemaphoreSlim(1, 1);
+
+    // Hidden marker groups (by image path) - persisted to localStorage
+    private HashSet<string> hiddenMarkerGroups = new();
+    private const string HiddenMarkerGroupsStorageKey = "hiddenMarkerGroups";
 
     #endregion
 
@@ -323,6 +328,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
                 // Mark circuit as fully ready for JS->NET calls
                 circuitFullyReady = true;
+
+                // Load hidden marker groups from localStorage
+                await LoadHiddenMarkerGroupsAsync();
 
                 // NOTE: SSE initialization moved to HandleMapInitialized
                 // because mapView component reference is not available until Leaflet fires its 'load' event
@@ -699,6 +707,12 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         // This is event-driven (triggered by Leaflet 'load') instead of render-cycle polling
         if (mapView != null && MapNavigation.CurrentMapId > 0)
         {
+            // Sync hidden marker groups to JS before loading markers
+            if (hiddenMarkerGroups.Count > 0)
+            {
+                await mapView.SetHiddenMarkerTypesAsync(hiddenMarkerGroups);
+            }
+
             Logger.LogInformation("Loading markers for map {MapId}", MapNavigation.CurrentMapId);
             await LoadMarkersForCurrentMapAsync();
 
@@ -1031,6 +1045,69 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
         await SyncLayerVisibility();
         StateHasChanged();  // Force UI re-render
+    }
+
+    private async Task HandleMarkerGroupVisibilityChanged((string ImageType, bool Visible) args)
+    {
+        if (args.Visible)
+        {
+            hiddenMarkerGroups.Remove(args.ImageType);
+        }
+        else
+        {
+            hiddenMarkerGroups.Add(args.ImageType);
+        }
+
+        // Save to localStorage
+        await SaveHiddenMarkerGroupsAsync();
+
+        // Sync to JavaScript
+        if (mapView != null)
+        {
+            await mapView.SetHiddenMarkerTypesAsync(hiddenMarkerGroups);
+
+            // Re-add markers that were previously hidden (if now visible)
+            // The JS addMarker function skips duplicates, so this just adds newly visible markers
+            if (args.Visible)
+            {
+                await LoadMarkersForCurrentMapAsync();
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task SaveHiddenMarkerGroupsAsync()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(hiddenMarkerGroups.ToList(), CamelCaseJsonOptions);
+            await SafeJs.SetLocalStorageAsync(HiddenMarkerGroupsStorageKey, json);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to save hidden marker groups to localStorage");
+        }
+    }
+
+    private async Task LoadHiddenMarkerGroupsAsync()
+    {
+        try
+        {
+            var json = await SafeJs.GetLocalStorageAsync(HiddenMarkerGroupsStorageKey);
+            if (!string.IsNullOrEmpty(json))
+            {
+                var groups = JsonSerializer.Deserialize<List<string>>(json, CamelCaseJsonOptions);
+                if (groups != null)
+                {
+                    hiddenMarkerGroups = new HashSet<string>(groups);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load hidden marker groups from localStorage");
+        }
     }
 
     private async Task HandleStateChanged()

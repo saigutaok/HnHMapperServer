@@ -296,6 +296,14 @@
         await SafeJs.InvokeVoidSafeAsync(jsModule, "clearAllMarkers");
     }
 
+    public async Task SetHiddenMarkerTypesAsync(IEnumerable<string> hiddenTypes)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        // Cast to object to prevent params from spreading the array
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "setHiddenMarkerTypes", (object)hiddenTypes.ToArray());
+    }
+
     public async Task SetMapRevisionAsync(int mapId, int revision)
     {
         if (!initialized || jsModule == null || disposed) return;

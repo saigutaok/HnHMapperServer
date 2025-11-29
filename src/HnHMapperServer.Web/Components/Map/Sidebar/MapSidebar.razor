@@ -133,12 +133,14 @@
                           CustomMarkers="@CustomMarkers"
                           Timers="@Timers"
                           Maps="@Maps"
+                          HiddenMarkerGroups="@HiddenMarkerGroups"
                           OnMarkerSelected="@OnMarkerSelected"
                           OnCustomMarkerEdit="@OnCustomMarkerEdit"
                           OnCustomMarkerDelete="@OnCustomMarkerDelete"
                           OnCustomMarkerSelected="@OnCustomMarkerSelected"
                           OnSetTimerForMarker="@OnSetTimerForMarker"
-                          OnSetTimerForCustomMarker="@OnSetTimerForCustomMarker" />
+                          OnSetTimerForCustomMarker="@OnSetTimerForCustomMarker"
+                          OnMarkerGroupVisibilityChanged="@OnMarkerGroupVisibilityChanged" />
         }
         else if (CurrentMode == SidebarMode.Layers)
         {
@@ -274,6 +276,10 @@
     // Event callbacks for timer actions
     [Parameter] public EventCallback<MarkerModel> OnSetTimerForMarker { get; set; }
     [Parameter] public EventCallback<CustomMarkerViewModel> OnSetTimerForCustomMarker { get; set; }
+
+    // Marker group visibility
+    [Parameter] public HashSet<string> HiddenMarkerGroups { get; set; } = new();
+    [Parameter] public EventCallback<(string ImageType, bool Visible)> OnMarkerGroupVisibilityChanged { get; set; }
 }
 
 

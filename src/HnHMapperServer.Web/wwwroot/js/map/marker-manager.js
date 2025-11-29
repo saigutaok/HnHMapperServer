@@ -9,6 +9,9 @@ let currentMapId = 0;
 let markerLayer = null;
 let detailedMarkerLayer = null;
 
+// Hidden marker types (by image path)
+const hiddenMarkerTypes = new Set();
+
 // Safely invoke .NET methods from JS
 let invokeDotNetSafe = null;
 
@@ -38,6 +41,56 @@ export function setCurrentMapId(mapId) {
 }
 
 /**
+ * Set hidden marker types (by image path)
+ * @param {Array<string>} types - Array of image paths to hide
+ * @param {object} mapInstance - Leaflet map instance (optional, for immediate refresh)
+ */
+export function setHiddenMarkerTypes(types, mapInstance) {
+    hiddenMarkerTypes.clear();
+    if (types && Array.isArray(types)) {
+        types.forEach(t => hiddenMarkerTypes.add(t));
+    }
+
+    // If map instance provided, refresh marker visibility
+    if (mapInstance) {
+        refreshMarkerVisibility(mapInstance);
+    }
+}
+
+/**
+ * Get current hidden marker types
+ * @returns {Array<string>} - Array of hidden image paths
+ */
+export function getHiddenMarkerTypes() {
+    return Array.from(hiddenMarkerTypes);
+}
+
+/**
+ * Refresh marker visibility based on current hidden types
+ * Removes markers that should be hidden, keeps visible ones
+ * @param {object} mapInstance - Leaflet map instance
+ */
+export function refreshMarkerVisibility(mapInstance) {
+    // Remove markers whose type is now hidden
+    const idsToRemove = [];
+    Object.keys(markers).forEach(id => {
+        const mark = markers[id];
+        if (hiddenMarkerTypes.has(mark.data.image)) {
+            // Remove from the appropriate layer group
+            if (markerLayer && markerLayer.hasLayer(mark.marker)) {
+                markerLayer.removeLayer(mark.marker);
+            }
+            if (detailedMarkerLayer && detailedMarkerLayer.hasLayer(mark.marker)) {
+                detailedMarkerLayer.removeLayer(mark.marker);
+            }
+            idsToRemove.push(id);
+        }
+    });
+    // Clean up markers object
+    idsToRemove.forEach(id => delete markers[id]);
+}
+
+/**
  * Add a marker to the map
  * @param {object} markerData - Marker data with id, name, image, position, type, ready, minReady, maxReady, hidden
  * @param {object} mapInstance - Leaflet map instance
@@ -54,6 +107,11 @@ export function addMarker(markerData, mapInstance) {
     }
 
     if (markerData.hidden) {
+        return false;
+    }
+
+    // Skip markers whose type is hidden by user preference
+    if (hiddenMarkerTypes.has(markerData.image)) {
         return false;
     }
 

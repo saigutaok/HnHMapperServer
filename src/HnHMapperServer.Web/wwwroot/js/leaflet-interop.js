@@ -756,6 +756,10 @@ export function jumpToMarker(markerId) {
     return MarkerManager.jumpToMarker(markerId, mapInstance);
 }
 
+export function setHiddenMarkerTypes(types) {
+    return MarkerManager.setHiddenMarkerTypes(types, mapInstance);
+}
+
 // Custom Marker Management - Delegate to CustomMarkerManager
 export function addCustomMarker(marker) {
     return CustomMarkerManager.addCustomMarker(marker, mapInstance);
