@@ -63,6 +63,9 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
     public DbSet<NotificationPreferenceEntity> NotificationPreferences => Set<NotificationPreferenceEntity>();
     public DbSet<TimerHistoryEntity> TimerHistory => Set<TimerHistoryEntity>();
 
+    // Overlay data tables
+    public DbSet<OverlayDataEntity> OverlayData => Set<OverlayDataEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -579,6 +582,35 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<OverlayDataEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.MapId).IsRequired();
+            entity.Property(e => e.CoordX).IsRequired();
+            entity.Property(e => e.CoordY).IsRequired();
+            entity.Property(e => e.OverlayType).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Data).IsRequired();
+            entity.Property(e => e.TenantId).IsRequired();
+            entity.Property(e => e.UpdatedAt).IsRequired();
+
+            // Unique index for (MapId, CoordX, CoordY, OverlayType, TenantId)
+            entity.HasIndex(e => new { e.MapId, e.CoordX, e.CoordY, e.OverlayType, e.TenantId }).IsUnique();
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.MapId);
+
+            // Foreign key to Tenants
+            entity.HasOne<TenantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Foreign key to MapInfoEntity
+            entity.HasOne<MapInfoEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.MapId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         // Global query filters for automatic tenant isolation
         // These filters automatically add "WHERE TenantId = {currentTenantId}" to all queries
         // GetCurrentTenantId() is evaluated at query time (not model creation time)
@@ -615,6 +647,9 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
 
         modelBuilder.Entity<TimerHistoryEntity>()
             .HasQueryFilter(t => t.TenantId == GetCurrentTenantId());
+
+        modelBuilder.Entity<OverlayDataEntity>()
+            .HasQueryFilter(o => o.TenantId == GetCurrentTenantId());
     }
 }
 
@@ -1108,4 +1143,52 @@ public sealed class TimerWarningEntity
     /// UTC timestamp when the warning was sent
     /// </summary>
     public DateTime SentAt { get; set; }
+}
+
+/// <summary>
+/// Stores overlay data (claims, villages, provinces) for a grid coordinate
+/// Data is bitpacked: 1250 bytes for 100x100 tiles, 1 bit per tile
+/// </summary>
+public sealed class OverlayDataEntity
+{
+    /// <summary>
+    /// Primary key
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// Foreign key to MapInfoEntity
+    /// </summary>
+    public int MapId { get; set; }
+
+    /// <summary>
+    /// Grid coordinate X
+    /// </summary>
+    public int CoordX { get; set; }
+
+    /// <summary>
+    /// Grid coordinate Y
+    /// </summary>
+    public int CoordY { get; set; }
+
+    /// <summary>
+    /// Overlay type (e.g., "ClaimFloor", "VillageOutline", "Province0")
+    /// </summary>
+    public string OverlayType { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Bitpacked overlay data (1250 bytes for 100x100 grid, LSB first)
+    /// Each bit represents whether the overlay is present at that tile position.
+    /// </summary>
+    public byte[] Data { get; set; } = Array.Empty<byte>();
+
+    /// <summary>
+    /// Tenant ID for multi-tenancy isolation
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// UTC timestamp when the overlay data was last updated
+    /// </summary>
+    public DateTime UpdatedAt { get; set; }
 }

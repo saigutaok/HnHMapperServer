@@ -8,6 +8,7 @@ import * as CharacterManager from './map/character-manager.js';
 import * as MarkerManager from './map/marker-manager.js';
 import * as CustomMarkerManager from './map/custom-marker-manager.js';
 import * as PingManager from './map/ping-manager.js';
+import * as OverlayLayer from './map/overlay-layer.js';
 
 // Grid Coordinate Layer
 L.GridLayer.GridCoord = L.GridLayer.extend({
@@ -198,6 +199,15 @@ export async function initializeMap(mapElementId, dotnetReference) {
     MarkerManager.initializeMarkerManager(invokeDotNetSafe);
     CustomMarkerManager.initializeCustomMarkerManager(customMarkerLayer, invokeDotNetSafe);
     PingManager.initialize(mapInstance);
+
+    // Initialize overlay layer (claims, villages, provinces)
+    // Layer is visible by default with pclaim enabled (controlled by floating buttons)
+    OverlayLayer.initializeOverlayLayer(mapInstance);
+
+    // Set up overlay data request callback to route through Blazor
+    OverlayLayer.setRequestOverlaysCallback((mapId, coords) => {
+        invokeDotNetSafe('JsRequestOverlays', mapId, coords);
+    });
 
     // Keyboard event handler for Alt+M ping shortcut
     let lastMouseLatLng = null;
@@ -523,6 +533,7 @@ export function changeMap(mapId) {
     CharacterManager.setCurrentMapId(mapId);
     MarkerManager.setCurrentMapId(mapId);
     CustomMarkerManager.setCurrentMapId(mapId);
+    OverlayLayer.setOverlayMapId(mapId);
 
     // Clear all markers to avoid showing markers from previous map
     CharacterManager.clearAllCharacters(mapInstance);
@@ -840,4 +851,44 @@ export function jumpToLatestPing() {
 
 export function getActivePingCount() {
     return PingManager.getActivePingCount();
+}
+
+// Overlay Layer Management - Control claims, villages, provinces display
+export function setClaimOverlayVisible(visible) {
+    OverlayLayer.setOverlayLayerVisible(visible, mapInstance);
+    return true;
+}
+
+export function setOverlayTypeEnabled(overlayType, enabled) {
+    OverlayLayer.setOverlayTypeEnabled(overlayType, enabled);
+    return true;
+}
+
+export function setEnabledOverlayTypes(types) {
+    OverlayLayer.setEnabledOverlayTypes(types);
+    return true;
+}
+
+export function getEnabledOverlayTypes() {
+    return OverlayLayer.getEnabledOverlayTypes();
+}
+
+export function isClaimOverlayVisible() {
+    return OverlayLayer.isOverlayLayerVisible(mapInstance);
+}
+
+export function clearOverlayCache() {
+    OverlayLayer.clearOverlayCache();
+    return true;
+}
+
+export function redrawOverlays() {
+    OverlayLayer.redrawOverlays();
+    return true;
+}
+
+// Receive overlay data from Blazor and pass to overlay layer
+export function setOverlayData(mapId, overlays) {
+    OverlayLayer.setOverlayData(mapId, overlays);
+    return true;
 }

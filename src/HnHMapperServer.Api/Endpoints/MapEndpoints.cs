@@ -30,6 +30,7 @@ public static class MapEndpoints
 
         group.MapGet("/v1/characters", GetCharacters);
         group.MapGet("/v1/markers", GetMarkers);
+        group.MapGet("/v1/overlays", GetOverlays);
         group.MapGet("/config", GetConfig);
         group.MapGet("/maps", GetMaps);
         group.MapPost("/admin/wipeTile", WipeTile);
@@ -115,6 +116,65 @@ public static class MapEndpoints
 
         var markers = await markerService.GetAllFrontendMarkersAsync();
         return Results.Json(markers);
+    }
+
+    /// <summary>
+    /// Get overlay data (claims, villages, provinces) for visible grid coordinates.
+    /// Query params:
+    ///   mapId: The map ID
+    ///   coords: Comma-separated list of x_y coordinates (e.g., "10_20,11_20,12_20")
+    /// Returns array of overlay data with base64-encoded bitpacked data.
+    /// </summary>
+    private static async Task<IResult> GetOverlays(
+        HttpContext context,
+        [FromQuery] int mapId,
+        [FromQuery] string? coords,
+        IOverlayDataRepository overlayRepository,
+        ILogger<Program> logger)
+    {
+        if (!context.User.Identity?.IsAuthenticated ?? true)
+            return Results.Unauthorized();
+
+        // Map permission already enforced by TenantMapAccess policy
+
+        if (string.IsNullOrWhiteSpace(coords))
+            return Results.Json(new List<object>());
+
+        // Parse coordinates (format: "x1_y1,x2_y2,x3_y3")
+        var coordList = new List<(int X, int Y)>();
+        foreach (var coordStr in coords.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = coordStr.Trim().Split('_');
+            if (parts.Length == 2 && int.TryParse(parts[0], out var x) && int.TryParse(parts[1], out var y))
+            {
+                coordList.Add((x, y));
+            }
+        }
+
+        if (coordList.Count == 0)
+            return Results.Json(new List<object>());
+
+        // Limit to prevent abuse (max 100 grids per request)
+        if (coordList.Count > 100)
+        {
+            coordList = coordList.Take(100).ToList();
+            logger.LogWarning("GetOverlays: Truncated coordinate list to 100 items");
+        }
+
+        var overlays = await overlayRepository.GetOverlaysForGridsAsync(mapId, coordList);
+
+        // Transform to API response format with base64-encoded data
+        var response = overlays.Select(o => new
+        {
+            MapId = o.MapId,
+            X = o.Coord.X,
+            Y = o.Coord.Y,
+            Type = o.OverlayType,
+            Data = Convert.ToBase64String(o.Data),
+            UpdatedAt = o.UpdatedAt
+        }).ToList();
+
+        return Results.Json(response);
     }
 
     private static async Task<IResult> GetConfig(

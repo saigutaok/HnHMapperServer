@@ -113,6 +113,7 @@ builder.Services.AddScoped<ICustomMarkerRepository, CustomMarkerRepository>();
 builder.Services.AddScoped<IPingRepository, PingRepository>();
 builder.Services.AddScoped<ITenantRepository, TenantRepository>();
 builder.Services.AddScoped<ITenantInvitationRepository, TenantInvitationRepository>();
+builder.Services.AddScoped<IOverlayDataRepository, OverlayDataRepository>();
 
 // Register services
 // UpdateNotificationService must be registered before CharacterService (dependency)

@@ -115,6 +115,11 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private bool showMarkerContextMenu = false;
     private bool showCustomMarkerContextMenu = false;
     private bool showMapActionMenu = false; // New: for Create Marker/Ping menu
+
+    // Overlay toggle state (floating buttons)
+    private bool showPClaim = false; // Player claims (red) - off by default
+    private bool showVClaim = false; // Village claims (orange) - off by default
+    private bool showProvince = false; // Province overlay - off by default
     private int contextMenuX = 0;
     private int contextMenuY = 0;
     private (int x, int y) contextCoords;
@@ -2226,6 +2231,36 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         await InvokeAsync(StateHasChanged);
     }
 
+    private async Task TogglePClaim()
+    {
+        showPClaim = !showPClaim;
+        leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "ClaimFloor", showPClaim);
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "ClaimOutline", showPClaim);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ToggleVClaim()
+    {
+        showVClaim = !showVClaim;
+        leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "VillageFloor", showVClaim);
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "VillageOutline", showVClaim);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ToggleProvince()
+    {
+        showProvince = !showProvince;
+        leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province0", showProvince);
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province1", showProvince);
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province2", showProvince);
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province3", showProvince);
+        await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province4", showProvince);
+        await InvokeAsync(StateHasChanged);
+    }
+
     [JSInvokable]
     public async Task OnCustomMarkerCreated(CustomMarkerEventModel markerEvent)
     {
@@ -2386,6 +2421,37 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error handling ping deleted event");
+        }
+    }
+
+    #endregion
+
+    #region Overlay Helpers
+
+    /// <summary>
+    /// Handles overlay data requests from JavaScript overlay layer via MapView callback.
+    /// Fetches data from API via MapDataService and returns it to JS.
+    /// </summary>
+    private async Task HandleRequestOverlays((int mapId, string coords) request)
+    {
+        try
+        {
+            Logger.LogDebug("HandleRequestOverlays: Received request for map {MapId}, coords: {Coords}", request.mapId, request.coords);
+
+            // Fetch overlay data from API via MapDataService (server-to-server)
+            var overlays = await MapData.GetOverlaysAsync(request.mapId, request.coords);
+
+            Logger.LogDebug("HandleRequestOverlays: Got {Count} overlays, sending to JS", overlays.Count);
+
+            // Send overlay data back to JavaScript via MapView
+            if (mapView != null)
+            {
+                await mapView.SetOverlayDataAsync(request.mapId, overlays);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error fetching overlay data for map {MapId}", request.mapId);
         }
     }
 

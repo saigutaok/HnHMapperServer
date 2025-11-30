@@ -20,6 +20,7 @@
     [Parameter] public EventCallback<(int mapId, int coordX, int coordY, int x, int y, int screenX, int screenY)> OnMapRightClick { get; set; }
     [Parameter] public EventCallback<bool> OnMapInitialized { get; set; }
     [Parameter] public EventCallback<int> OnMapChanged { get; set; }
+    [Parameter] public EventCallback<(int mapId, string coords)> OnRequestOverlays { get; set; }
 
     private ElementReference mapElement;
     private IJSObjectReference? jsModule;
@@ -381,6 +382,27 @@
         {
             await OnMapChanged.InvokeAsync(mapId);
         }
+    }
+
+    [JSInvokable]
+    public async Task JsRequestOverlays(int mapId, string coords)
+    {
+        Logger.LogDebug("Overlay request received from JavaScript for map {MapId}, coords: {Coords}", mapId, coords);
+
+        if (OnRequestOverlays.HasDelegate)
+        {
+            await OnRequestOverlays.InvokeAsync((mapId, coords));
+        }
+    }
+
+    /// <summary>
+    /// Send overlay data back to JavaScript after fetching from API
+    /// </summary>
+    public async Task SetOverlayDataAsync(int mapId, object overlays)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "setOverlayData", mapId, overlays);
     }
 
     public async ValueTask DisposeAsync()
