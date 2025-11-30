@@ -3,8 +3,10 @@
 
 import { HnHMaxZoom } from './leaflet-config.js';
 
-// Marker storage
+// Marker storage - visible markers with their Leaflet instances
 const markers = {};
+// All marker data storage - persists regardless of visibility for re-evaluation
+const allMarkerData = {};
 let currentMapId = 0;
 let markerLayer = null;
 let detailedMarkerLayer = null;
@@ -14,6 +16,12 @@ const hiddenMarkerTypes = new Set();
 
 // Thingwall highlighting state
 let thingwallHighlightEnabled = false;
+
+// Quest giver highlighting state
+let questGiverHighlightEnabled = false;
+
+// Marker filter mode state (hide all markers except highlighted ones)
+let markerFilterModeEnabled = false;
 
 // Safely invoke .NET methods from JS
 let invokeDotNetSafe = null;
@@ -97,12 +105,18 @@ export function refreshMarkerVisibility(mapInstance) {
  * Add a marker to the map
  * @param {object} markerData - Marker data with id, name, image, position, type, ready, minReady, maxReady, hidden
  * @param {object} mapInstance - Leaflet map instance
+ * @param {boolean} skipStorage - If true, don't store in allMarkerData (used during rebuilds)
  * @returns {boolean} - True if marker was added
  */
-export function addMarker(markerData, mapInstance) {
+export function addMarker(markerData, mapInstance, skipStorage = false) {
     // Only show markers on their own map
     if (markerData.map !== currentMapId) {
         return false;
+    }
+
+    // Store marker data for later re-evaluation (unless this is a rebuild)
+    if (!skipStorage) {
+        allMarkerData[markerData.id] = markerData;
     }
 
     if (markers[markerData.id]) {
@@ -122,7 +136,17 @@ export function addMarker(markerData, mapInstance) {
     const isCustom = markerData.image === "gfx/terobjs/mm/custom";
     const isCave = markerData.name.toLowerCase() === "cave";
     const isThingwall = markerData.type === "thingwall";
-    const shouldHighlight = isThingwall && thingwallHighlightEnabled;
+    const isQuestGiver = markerData.type === "questgiver";
+    const shouldHighlightThingwall = isThingwall && thingwallHighlightEnabled;
+    const shouldHighlightQuestGiver = isQuestGiver && questGiverHighlightEnabled;
+    const shouldHighlight = shouldHighlightThingwall || shouldHighlightQuestGiver;
+
+    // Marker filter mode: hide all markers except highlighted ones
+    if (markerFilterModeEnabled) {
+        if (!shouldHighlight) {
+            return false; // Skip non-highlighted markers when filter mode is active
+        }
+    }
 
     // Use larger icons for highlighted thingwalls (48px vs 36px default)
     let iconSize = shouldHighlight ? [48, 48] : (isCustom && !isCave ? [36, 36] : [36, 36]);
@@ -159,20 +183,26 @@ export function addMarker(markerData, mapInstance) {
     const color = getMarkerColor(markerData.type);
     const extra = getMarkerReadyText(markerData);
 
+    // Determine tooltip and highlight class based on marker type
+    const tooltipClass = shouldHighlightThingwall ? 'thingwall-label' :
+                         shouldHighlightQuestGiver ? 'questgiver-label' : '';
+    const highlightClass = shouldHighlightThingwall ? 'thingwall-highlighted' :
+                           shouldHighlightQuestGiver ? 'questgiver-highlighted' : '';
+
     marker.bindTooltip(`<div style='color:${color};'><b>${markerData.name} ${extra}</b></div>`, {
         permanent: shouldHighlight,
         direction: 'top',
         sticky: true,
         opacity: 0.9,
-        className: shouldHighlight ? 'thingwall-label' : ''
+        className: tooltipClass
     });
 
-    // Add highlight class to marker element if thingwall highlighting is enabled
-    if (shouldHighlight) {
+    // Add highlight class to marker element if highlighting is enabled
+    if (shouldHighlight && highlightClass) {
         marker.on('add', () => {
             const el = marker.getElement();
             if (el) {
-                el.classList.add('thingwall-highlighted');
+                el.classList.add(highlightClass);
             }
         });
     }
@@ -291,7 +321,36 @@ export function removeMarker(markerId, mapInstance) {
  */
 export function clearAllMarkers(mapInstance) {
     Object.keys(markers).forEach(id => removeMarker(parseInt(id), mapInstance));
+    // Also clear stored marker data
+    Object.keys(allMarkerData).forEach(id => delete allMarkerData[id]);
     return true;
+}
+
+/**
+ * Rebuild all markers from stored data based on current visibility settings
+ * Used when filter mode or highlight toggles change
+ * @param {object} mapInstance - Leaflet map instance
+ */
+function rebuildAllMarkers(mapInstance) {
+    // Remove all visible markers from the map
+    Object.keys(markers).forEach(id => {
+        const mark = markers[id];
+        if (markerLayer && markerLayer.hasLayer(mark.marker)) {
+            markerLayer.removeLayer(mark.marker);
+        }
+        if (detailedMarkerLayer && detailedMarkerLayer.hasLayer(mark.marker)) {
+            detailedMarkerLayer.removeLayer(mark.marker);
+        }
+        mapInstance.removeLayer(mark.marker);
+    });
+
+    // Clear markers object
+    Object.keys(markers).forEach(id => delete markers[id]);
+
+    // Re-add all markers from stored data (with skipStorage=true to avoid re-storing)
+    Object.values(allMarkerData).forEach(markerData => {
+        addMarker(markerData, mapInstance, true);
+    });
 }
 
 /**
@@ -347,36 +406,84 @@ export function setThingwallHighlightEnabled(enabled, mapInstance) {
 
     thingwallHighlightEnabled = enabled;
 
-    // Rebuild all thingwall markers to apply/remove highlighting
-    const thingwallMarkers = Object.entries(markers).filter(([id, mark]) => mark.data.type === "thingwall");
+    // Rebuild all markers to apply new visibility/highlighting rules
+    rebuildAllMarkers(mapInstance);
 
-    thingwallMarkers.forEach(([id, mark]) => {
-        const markerData = mark.data;
-
-        // Remove old marker from layer
-        if (markerLayer && markerLayer.hasLayer(mark.marker)) {
-            markerLayer.removeLayer(mark.marker);
-        }
-        if (detailedMarkerLayer && detailedMarkerLayer.hasLayer(mark.marker)) {
-            detailedMarkerLayer.removeLayer(mark.marker);
-        }
-        mapInstance.removeLayer(mark.marker);
-
-        // Delete from markers object
-        delete markers[id];
-
-        // Re-add with new highlighting state
-        addMarker(markerData, mapInstance);
-    });
-
-    console.log(`[MarkerManager] Thingwall highlighting ${enabled ? 'enabled' : 'disabled'}, updated ${thingwallMarkers.length} markers`);
+    console.log(`[MarkerManager] Thingwall highlighting ${enabled ? 'enabled' : 'disabled'}`);
     return true;
+}
+
+/**
+ * Enable/disable quest giver highlighting with glow effect and permanent labels
+ * @param {boolean} enabled - Whether highlighting is enabled
+ * @param {object} mapInstance - Leaflet map instance
+ * @returns {boolean} - Always true
+ */
+export function setQuestGiverHighlightEnabled(enabled, mapInstance) {
+    if (!mapInstance) {
+        console.warn('[MarkerManager] Cannot toggle quest giver highlight - mapInstance is null');
+        return false;
+    }
+
+    if (questGiverHighlightEnabled === enabled) {
+        return true; // No change needed
+    }
+
+    questGiverHighlightEnabled = enabled;
+
+    // Rebuild all markers to apply new visibility/highlighting rules
+    rebuildAllMarkers(mapInstance);
+
+    console.log(`[MarkerManager] Quest giver highlighting ${enabled ? 'enabled' : 'disabled'}`);
+    return true;
+}
+
+/**
+ * Get whether quest giver highlighting is enabled
+ * @returns {boolean} - True if quest giver highlighting is enabled
+ */
+export function isQuestGiverHighlightEnabled() {
+    return questGiverHighlightEnabled;
+}
+
+/**
+ * Enable/disable marker filter mode
+ * When enabled, hides all markers except those with active highlights (thingwalls, quest givers)
+ * @param {boolean} enabled - Whether filter mode is enabled
+ * @param {object} mapInstance - Leaflet map instance
+ * @returns {boolean} - Always true
+ */
+export function setMarkerFilterModeEnabled(enabled, mapInstance) {
+    if (!mapInstance) {
+        console.warn('[MarkerManager] Cannot toggle marker filter mode - mapInstance is null');
+        return false;
+    }
+
+    if (markerFilterModeEnabled === enabled) {
+        return true; // No change needed
+    }
+
+    markerFilterModeEnabled = enabled;
+
+    // Rebuild all markers to apply new visibility/highlighting rules
+    rebuildAllMarkers(mapInstance);
+
+    console.log(`[MarkerManager] Marker filter mode ${enabled ? 'enabled' : 'disabled'}`);
+    return true;
+}
+
+/**
+ * Get whether marker filter mode is enabled
+ * @returns {boolean} - True if marker filter mode is enabled
+ */
+export function isMarkerFilterModeEnabled() {
+    return markerFilterModeEnabled;
 }
 
 // Helper functions
 
 function getMarkerColor(type) {
-    if (type === "quest") return "#FDB800";
+    if (type === "questgiver") return "#2CDB2C"; // Green for quest givers
     if (type === "thingwall") return "#00cffd";
     return "#FFF";
 }

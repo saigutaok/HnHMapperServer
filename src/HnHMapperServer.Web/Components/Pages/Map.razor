@@ -144,6 +144,16 @@
                         </MudButton>
                     </MudTooltip>
 
+                    <MudTooltip Text="Toggle Quest Giver Highlighting" Placement="Placement.Right">
+                        <MudButton OnClick="@ToggleQuestGiverHighlight"
+                                   Variant="Variant.Filled"
+                                   Color="@(showQuestGiverHighlight ? Color.Success : Color.Default)"
+                                   Style="min-width: 40px; min-height: 40px; padding: 8px; border-radius: 50%;">
+                            <img src="/gfx/invobjs/small/bush.png" alt="Quest Givers"
+                                 style="width: 24px; height: 24px; @(showQuestGiverHighlight ? "" : "opacity: 0.5;")" />
+                        </MudButton>
+                    </MudTooltip>
+
                     <MudTooltip Text="Toggle Roads" Placement="Placement.Right">
                         <MudButton OnClick="@ToggleRoads"
                                    Variant="Variant.Filled"
@@ -151,6 +161,16 @@
                                    Style="min-width: 40px; min-height: 40px; padding: 8px; border-radius: 50%;">
                             <MudIcon Icon="@Icons.Material.Filled.Timeline"
                                      Style="@(showRoads ? "" : "opacity: 0.5;")" />
+                        </MudButton>
+                    </MudTooltip>
+
+                    <MudTooltip Text="Marker Filter Mode (show only highlighted markers)" Placement="Placement.Right">
+                        <MudButton OnClick="@ToggleMarkerFilterMode"
+                                   Variant="Variant.Filled"
+                                   Color="@(showMarkerFilterMode ? Color.Warning : Color.Default)"
+                                   Style="min-width: 40px; min-height: 40px; padding: 8px; border-radius: 50%;">
+                            <MudIcon Icon="@Icons.Material.Filled.FilterAlt"
+                                     Style="@(showMarkerFilterMode ? "" : "opacity: 0.5;")" />
                         </MudButton>
                     </MudTooltip>
                 </div>
