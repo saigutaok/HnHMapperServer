@@ -48,7 +48,7 @@ public class MapCleanupService : BackgroundService
                 await Task.Delay(TimeSpan.FromSeconds(cleanupIntervalSeconds), stoppingToken);
 
                 var sw = Stopwatch.StartNew();
-                _logger.LogDebug("Map cleanup job started");
+                _logger.LogInformation("Map cleanup job started");
 
                 using var scope = _scopeFactory.CreateScope();
                 var mapRepository = scope.ServiceProvider.GetRequiredService<IMapRepository>();
@@ -113,7 +113,7 @@ public class MapCleanupService : BackgroundService
                 }
 
                 sw.Stop();
-                _logger.LogDebug("Map cleanup job completed in {ElapsedMs}ms", sw.ElapsedMilliseconds);
+                _logger.LogInformation("Map cleanup job completed in {ElapsedMs}ms", sw.ElapsedMilliseconds);
             }
             catch (OperationCanceledException)
             {

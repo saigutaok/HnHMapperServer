@@ -120,6 +120,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private bool showPClaim = false; // Player claims (red) - off by default
     private bool showVClaim = false; // Village claims (orange) - off by default
     private bool showProvince = false; // Province overlay - off by default
+    private bool showThingwallHighlight = false; // Thingwall highlighting (cyan) - off by default
     private int contextMenuX = 0;
     private int contextMenuY = 0;
     private (int x, int y) contextCoords;
@@ -2258,6 +2259,14 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province2", showProvince);
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province3", showProvince);
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province4", showProvince);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ToggleThingwallHighlight()
+    {
+        showThingwallHighlight = !showThingwallHighlight;
+        leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/leaflet-interop.js");
+        await leafletModule.InvokeVoidAsync("setThingwallHighlightEnabled", showThingwallHighlight);
         await InvokeAsync(StateHasChanged);
     }
 

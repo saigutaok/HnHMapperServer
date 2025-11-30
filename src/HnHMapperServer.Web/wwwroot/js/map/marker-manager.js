@@ -12,6 +12,9 @@ let detailedMarkerLayer = null;
 // Hidden marker types (by image path)
 const hiddenMarkerTypes = new Set();
 
+// Thingwall highlighting state
+let thingwallHighlightEnabled = false;
+
 // Safely invoke .NET methods from JS
 let invokeDotNetSafe = null;
 
@@ -118,9 +121,12 @@ export function addMarker(markerData, mapInstance) {
     const iconUrl = `${markerData.image}.png`;
     const isCustom = markerData.image === "gfx/terobjs/mm/custom";
     const isCave = markerData.name.toLowerCase() === "cave";
+    const isThingwall = markerData.type === "thingwall";
+    const shouldHighlight = isThingwall && thingwallHighlightEnabled;
 
-    let iconSize = isCustom && !isCave ? [36, 36] : [36, 36];
-    let iconAnchor = isCustom && !isCave ? [11, 21] : [18, 18];
+    // Use larger icons for highlighted thingwalls (48px vs 36px default)
+    let iconSize = shouldHighlight ? [48, 48] : (isCustom && !isCave ? [36, 36] : [36, 36]);
+    let iconAnchor = shouldHighlight ? [24, 24] : (isCustom && !isCave ? [11, 21] : [18, 18]);
 
     let icon;
     if (markerData.timerText) {
@@ -154,11 +160,22 @@ export function addMarker(markerData, mapInstance) {
     const extra = getMarkerReadyText(markerData);
 
     marker.bindTooltip(`<div style='color:${color};'><b>${markerData.name} ${extra}</b></div>`, {
-        permanent: false,
+        permanent: shouldHighlight,
         direction: 'top',
         sticky: true,
-        opacity: 0.9
+        opacity: 0.9,
+        className: shouldHighlight ? 'thingwall-label' : ''
     });
+
+    // Add highlight class to marker element if thingwall highlighting is enabled
+    if (shouldHighlight) {
+        marker.on('add', () => {
+            const el = marker.getElement();
+            if (el) {
+                el.classList.add('thingwall-highlighted');
+            }
+        });
+    }
 
     marker.on('click', () => {
         invokeDotNetSafe('JsOnMarkerClicked', markerData.id);
@@ -310,6 +327,45 @@ export function jumpToMarker(markerId, mapInstance) {
         return true;
     }
     return false;
+}
+
+/**
+ * Enable/disable thingwall highlighting with glow effect and permanent labels
+ * @param {boolean} enabled - Whether highlighting is enabled
+ * @param {object} mapInstance - Leaflet map instance
+ * @returns {boolean} - Always true
+ */
+export function setThingwallHighlightEnabled(enabled, mapInstance) {
+    if (thingwallHighlightEnabled === enabled) {
+        return true; // No change needed
+    }
+
+    thingwallHighlightEnabled = enabled;
+
+    // Rebuild all thingwall markers to apply/remove highlighting
+    const thingwallMarkers = Object.entries(markers).filter(([id, mark]) => mark.data.type === "thingwall");
+
+    thingwallMarkers.forEach(([id, mark]) => {
+        const markerData = mark.data;
+
+        // Remove old marker from layer
+        if (markerLayer && markerLayer.hasLayer(mark.marker)) {
+            markerLayer.removeLayer(mark.marker);
+        }
+        if (detailedMarkerLayer && detailedMarkerLayer.hasLayer(mark.marker)) {
+            detailedMarkerLayer.removeLayer(mark.marker);
+        }
+        mapInstance.removeLayer(mark.marker);
+
+        // Delete from markers object
+        delete markers[id];
+
+        // Re-add with new highlighting state
+        addMarker(markerData, mapInstance);
+    });
+
+    console.log(`[MarkerManager] Thingwall highlighting ${enabled ? 'enabled' : 'disabled'}, updated ${thingwallMarkers.length} markers`);
+    return true;
 }
 
 // Helper functions

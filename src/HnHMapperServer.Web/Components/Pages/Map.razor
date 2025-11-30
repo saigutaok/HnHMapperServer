@@ -129,6 +129,16 @@
                             <img src="/gfx/hud/wndmap/btns/realm.png" alt="Provinces" style="width: 24px; height: 24px; @(showProvince ? "" : "opacity: 0.5;")" />
                         </MudButton>
                     </MudTooltip>
+
+                    <MudTooltip Text="Toggle Thingwall Highlighting" Placement="Placement.Right">
+                        <MudButton OnClick="@ToggleThingwallHighlight"
+                                   Variant="Variant.Filled"
+                                   Color="@(showThingwallHighlight ? Color.Info : Color.Default)"
+                                   Style="min-width: 40px; min-height: 40px; padding: 8px; border-radius: 50%;">
+                            <img src="/gfx/terobjs/mm/thingwall.png" alt="Thingwall"
+                                 style="width: 24px; height: 24px; @(showThingwallHighlight ? "" : "opacity: 0.5;")" />
+                        </MudButton>
+                    </MudTooltip>
                 </div>
 
                 <!-- Go to Ping Button (floating) - positioned at top center of map area, only shown when there are active pings -->

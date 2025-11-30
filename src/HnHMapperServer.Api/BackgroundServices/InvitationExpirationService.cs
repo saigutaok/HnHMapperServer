@@ -37,13 +37,13 @@ public class InvitationExpirationService : BackgroundService
             var sw = Stopwatch.StartNew();
             try
             {
-                _logger.LogDebug("Invitation expiration job started");
+                _logger.LogInformation("Invitation expiration job started");
 
                 await ProcessExpiredInvitationsAsync();
                 await RemovePendingUsersAfter7DaysAsync();
 
                 sw.Stop();
-                _logger.LogDebug("Invitation expiration job completed in {ElapsedMs}ms", sw.ElapsedMilliseconds);
+                _logger.LogInformation("Invitation expiration job completed in {ElapsedMs}ms", sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {

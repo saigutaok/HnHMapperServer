@@ -67,7 +67,7 @@ public class HmapTempCleanupService : BackgroundService
     private Task CleanupTempFilesAsync(int retentionDays)
     {
         var sw = Stopwatch.StartNew();
-        _logger.LogDebug("HMAP temp cleanup job started");
+        _logger.LogInformation("HMAP temp cleanup job started");
 
         try
         {
@@ -77,7 +77,7 @@ public class HmapTempCleanupService : BackgroundService
             if (!Directory.Exists(tempDir))
             {
                 sw.Stop();
-                _logger.LogDebug("HMAP temp cleanup job completed in {ElapsedMs}ms: directory does not exist, nothing to clean up", sw.ElapsedMilliseconds);
+                _logger.LogInformation("HMAP temp cleanup job completed in {ElapsedMs}ms: directory does not exist, nothing to clean up", sw.ElapsedMilliseconds);
                 return Task.CompletedTask;
             }
 
@@ -115,7 +115,7 @@ public class HmapTempCleanupService : BackgroundService
             }
             else
             {
-                _logger.LogDebug("HMAP temp cleanup job completed in {ElapsedMs}ms: no stale files found", sw.ElapsedMilliseconds);
+                _logger.LogInformation("HMAP temp cleanup job completed in {ElapsedMs}ms: no stale files found", sw.ElapsedMilliseconds);
             }
         }
         catch (Exception ex)

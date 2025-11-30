@@ -53,7 +53,7 @@ public class ZoomTileRebuildService : BackgroundService
             var sw = Stopwatch.StartNew();
             try
             {
-                _logger.LogDebug("Zoom tile rebuild job started");
+                _logger.LogInformation("Zoom tile rebuild job started");
 
                 using var scope = _scopeFactory.CreateScope();
                 var tileService = scope.ServiceProvider.GetRequiredService<ITileService>();
@@ -97,7 +97,7 @@ public class ZoomTileRebuildService : BackgroundService
                 }
                 else
                 {
-                    _logger.LogDebug("Zoom tile rebuild job completed in {ElapsedMs}ms (no tiles to rebuild)", sw.ElapsedMilliseconds);
+                    _logger.LogInformation("Zoom tile rebuild job completed in {ElapsedMs}ms (no tiles to rebuild)", sw.ElapsedMilliseconds);
                 }
 
                 await Task.Delay(TimeSpan.FromMinutes(intervalMinutes), stoppingToken);

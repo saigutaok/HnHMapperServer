@@ -60,7 +60,7 @@ public class PreviewCleanupService : BackgroundService
     private async Task CleanupOldPreviewsAsync()
     {
         var sw = Stopwatch.StartNew();
-        _logger.LogDebug("Preview cleanup job started");
+        _logger.LogInformation("Preview cleanup job started");
 
         using var scope = _serviceProvider.CreateScope();
         var mapPreviewService = scope.ServiceProvider.GetRequiredService<IMapPreviewService>();
@@ -76,7 +76,7 @@ public class PreviewCleanupService : BackgroundService
             }
             else
             {
-                _logger.LogDebug("Preview cleanup job completed in {ElapsedMs}ms: no old previews to delete", sw.ElapsedMilliseconds);
+                _logger.LogInformation("Preview cleanup job completed in {ElapsedMs}ms: no old previews to delete", sw.ElapsedMilliseconds);
             }
         }
         catch (Exception ex)

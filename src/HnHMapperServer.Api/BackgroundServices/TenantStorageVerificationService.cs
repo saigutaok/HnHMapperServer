@@ -63,7 +63,7 @@ public class TenantStorageVerificationService : BackgroundService
     private async Task VerifyAllTenantsAsync(CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
-        _logger.LogDebug("Storage verification job started");
+        _logger.LogInformation("Storage verification job started");
 
         using var scope = _serviceProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();

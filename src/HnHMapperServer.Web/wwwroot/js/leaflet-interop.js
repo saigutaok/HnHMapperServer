@@ -763,6 +763,10 @@ export function toggleMarkerTooltips(type, visible) {
     return MarkerManager.toggleMarkerTooltips(type, visible);
 }
 
+export function setThingwallHighlightEnabled(enabled) {
+    return MarkerManager.setThingwallHighlightEnabled(enabled, mapInstance);
+}
+
 export function jumpToMarker(markerId) {
     return MarkerManager.jumpToMarker(markerId, mapInstance);
 }
