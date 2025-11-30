@@ -2,6 +2,7 @@
 @using HnHMapperServer.Web.Models
 @using HnHMapperServer.Web.Services
 @using HnHMapperServer.Services.Interfaces
+@using HnHMapperServer.Core.DTOs
 @using Microsoft.Extensions.Logging
 @inject IJSRuntime JS
 @inject SafeJsInterop SafeJs
@@ -23,6 +24,8 @@
     [Parameter] public EventCallback<bool> OnMapInitialized { get; set; }
     [Parameter] public EventCallback<int> OnMapChanged { get; set; }
     [Parameter] public EventCallback<(int mapId, string coords)> OnRequestOverlays { get; set; }
+    [Parameter] public EventCallback<(int mapId, List<RoadWaypointDto> waypoints)> OnRoadDrawingComplete { get; set; }
+    [Parameter] public EventCallback<(int roadId, int screenX, int screenY)> OnRoadContextMenu { get; set; }
 
     private ElementReference mapElement;
     private IJSObjectReference? jsModule;
@@ -410,6 +413,29 @@
         if (!initialized || jsModule == null || disposed) return;
 
         await SafeJs.InvokeVoidSafeAsync(jsModule, "setOverlayData", mapId, overlays);
+    }
+
+    [JSInvokable]
+    public async Task JsOnRoadDrawingComplete(int mapId, List<RoadWaypointDto> waypoints)
+    {
+        Logger.LogInformation("[Road] JsOnRoadDrawingComplete received: mapId={MapId}, waypoints={Count}",
+            mapId, waypoints?.Count ?? 0);
+
+        if (OnRoadDrawingComplete.HasDelegate)
+        {
+            await OnRoadDrawingComplete.InvokeAsync((mapId, waypoints ?? new List<RoadWaypointDto>()));
+        }
+    }
+
+    [JSInvokable]
+    public async Task JsOnRoadContextMenu(int roadId, int screenX, int screenY)
+    {
+        Logger.LogDebug("[Road] JsOnRoadContextMenu received: roadId={RoadId}", roadId);
+
+        if (OnRoadContextMenu.HasDelegate)
+        {
+            await OnRoadContextMenu.InvokeAsync((roadId, screenX, screenY));
+        }
     }
 
     public async ValueTask DisposeAsync()

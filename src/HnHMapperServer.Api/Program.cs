@@ -109,6 +109,7 @@ builder.Services.AddScoped<ITileRepository, TileRepository>();
 builder.Services.AddScoped<IMapRepository, MapRepository>();
 builder.Services.AddScoped<IConfigRepository, ConfigRepository>();
 builder.Services.AddScoped<ICustomMarkerRepository, CustomMarkerRepository>();
+builder.Services.AddScoped<IRoadRepository, RoadRepository>();
 builder.Services.AddScoped<IPingRepository, PingRepository>();
 builder.Services.AddScoped<ITenantRepository, TenantRepository>();
 builder.Services.AddScoped<ITenantInvitationRepository, TenantInvitationRepository>();
@@ -124,6 +125,7 @@ builder.Services.AddScoped<ITileService, TileService>();
 builder.Services.AddScoped<IGridService, GridService>();
 builder.Services.AddScoped<IMarkerService, MarkerService>();
 builder.Services.AddScoped<ICustomMarkerService, CustomMarkerService>();
+builder.Services.AddScoped<IRoadService, RoadService>();
 builder.Services.AddScoped<IPingService, PingService>();
 builder.Services.AddScoped<ITenantService, TenantService>();
 builder.Services.AddScoped<IInvitationService, InvitationService>();
@@ -711,6 +713,7 @@ app.MapIdentityEndpoints();
 app.MapClientEndpoints();
 app.MapMapEndpoints();
 app.MapCustomMarkerEndpoints();
+app.MapRoadEndpoints();
 app.MapPingEndpoints();
 app.MapNotificationEndpoints(); // Notification system endpoints
 app.MapTimerEndpoints(); // Timer system endpoints

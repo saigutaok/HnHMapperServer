@@ -522,6 +522,9 @@ public static class MapEndpoints
         var customMarkerDeleted = updateNotificationService.SubscribeToCustomMarkerDeleted();
         var pingCreated = updateNotificationService.SubscribeToPingCreated();
         var pingDeleted = updateNotificationService.SubscribeToPingDeleted();
+        var roadCreated = updateNotificationService.SubscribeToRoadCreated();
+        var roadUpdated = updateNotificationService.SubscribeToRoadUpdated();
+        var roadDeleted = updateNotificationService.SubscribeToRoadDeleted();
         var notificationCreated = updateNotificationService.SubscribeToNotificationCreated();
         var notificationRead = updateNotificationService.SubscribeToNotificationRead();
         var notificationDismissed = updateNotificationService.SubscribeToNotificationDismissed();
@@ -693,6 +696,43 @@ public static class MapEndpoints
                         var deleteDto = new { Id = pingDeleteEvent.Id };
                         var deleteJson = JsonSerializer.Serialize(deleteDto, jsonOptions);
                         await context.Response.WriteAsync($"event: pingDeleted\ndata: {deleteJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for road creation events
+                // SECURITY: Filter by tenant to prevent cross-tenant road visibility
+                while (roadCreated.TryRead(out var road))
+                {
+                    if (road.TenantId == tenantId)
+                    {
+                        var roadJson = JsonSerializer.Serialize(road, jsonOptions);
+                        await context.Response.WriteAsync($"event: roadCreated\ndata: {roadJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for road update events
+                // SECURITY: Filter by tenant to prevent cross-tenant road visibility
+                while (roadUpdated.TryRead(out var updatedRoad))
+                {
+                    if (updatedRoad.TenantId == tenantId)
+                    {
+                        var roadJson = JsonSerializer.Serialize(updatedRoad, jsonOptions);
+                        await context.Response.WriteAsync($"event: roadUpdated\ndata: {roadJson}\n\n");
+                        await context.Response.Body.FlushAsync();
+                    }
+                }
+
+                // Check for road deletion events
+                // SECURITY: Filter by tenant to prevent cross-tenant road visibility
+                while (roadDeleted.TryRead(out var roadDeleteEvent))
+                {
+                    if (roadDeleteEvent.TenantId == tenantId)
+                    {
+                        var deleteDto = new { Id = roadDeleteEvent.Id };
+                        var deleteJson = JsonSerializer.Serialize(deleteDto, jsonOptions);
+                        await context.Response.WriteAsync($"event: roadDeleted\ndata: {deleteJson}\n\n");
                         await context.Response.Body.FlushAsync();
                     }
                 }
