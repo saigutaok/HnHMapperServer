@@ -47,6 +47,7 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
     public DbSet<ConfigEntity> Config => Set<ConfigEntity>();
     public DbSet<TokenEntity> Tokens => Set<TokenEntity>();
     public DbSet<CustomMarkerEntity> CustomMarkers => Set<CustomMarkerEntity>();
+    public DbSet<RoadEntity> Roads => Set<RoadEntity>();
     public DbSet<PingEntity> Pings => Set<PingEntity>();
 
     // Multi-tenancy tables
@@ -275,6 +276,48 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
                 .WithMany()
                 .HasForeignKey(e => new { e.GridId, e.TenantId })
                 .OnDelete(DeleteBehavior.Cascade);
+
+            // Foreign key to MapInfoEntity
+            entity.HasOne<MapInfoEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.MapId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Foreign key to Tenants
+            entity.HasOne<TenantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RoadEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+
+            entity.Property(e => e.Name)
+                .HasMaxLength(80)
+                .IsRequired();
+
+            entity.Property(e => e.Waypoints)
+                .IsRequired();
+
+            entity.Property(e => e.CreatedBy)
+                .IsRequired();
+
+            entity.Property(e => e.CreatedAt)
+                .IsRequired();
+
+            entity.Property(e => e.UpdatedAt)
+                .IsRequired();
+
+            entity.Property(e => e.TenantId)
+                .IsRequired();
+
+            entity.HasIndex(e => e.MapId);
+            entity.HasIndex(e => e.CreatedBy);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.MapId, e.CreatedAt })
+                .HasAnnotation("Sqlite:IndexColumnOrder", new[] { "ASC", "DESC" });
 
             // Foreign key to MapInfoEntity
             entity.HasOne<MapInfoEntity>()
@@ -670,6 +713,9 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
         modelBuilder.Entity<CustomMarkerEntity>()
             .HasQueryFilter(c => c.TenantId == GetCurrentTenantId());
 
+        modelBuilder.Entity<RoadEntity>()
+            .HasQueryFilter(r => r.TenantId == GetCurrentTenantId());
+
         modelBuilder.Entity<PingEntity>()
             .HasQueryFilter(p => p.TenantId == GetCurrentTenantId());
 
@@ -857,6 +903,58 @@ public sealed class CustomMarkerEntity
 
     /// <summary>
     /// Whether the marker is hidden
+    /// </summary>
+    public bool Hidden { get; set; }
+
+    /// <summary>
+    /// Tenant ID for multi-tenancy isolation
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Represents a road/path created by users on the map
+/// </summary>
+public sealed class RoadEntity
+{
+    /// <summary>
+    /// Primary key
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// Foreign key to MapInfoEntity
+    /// </summary>
+    public int MapId { get; set; }
+
+    /// <summary>
+    /// Road name (max 80 characters)
+    /// </summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Waypoints as JSON array of coordinate objects
+    /// Format: [{"coordX": 5, "coordY": 10, "x": 50, "y": 25}, ...]
+    /// </summary>
+    public string Waypoints { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Username of the creator (from ASP.NET Identity)
+    /// </summary>
+    public string CreatedBy { get; set; } = string.Empty;
+
+    /// <summary>
+    /// UTC timestamp when the road was created
+    /// </summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>
+    /// UTC timestamp when the road was last updated
+    /// </summary>
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>
+    /// Whether the road is hidden
     /// </summary>
     public bool Hidden { get; set; }
 
