@@ -784,6 +784,22 @@ export function setThingwallHighlightEnabled(enabled) {
     return MarkerManager.setThingwallHighlightEnabled(enabled, mapInstance);
 }
 
+export function setQuestGiverHighlightEnabled(enabled) {
+    if (!mapInstance) {
+        console.warn('[LeafletInterop] Cannot toggle quest giver highlight - map not initialized');
+        return false;
+    }
+    return MarkerManager.setQuestGiverHighlightEnabled(enabled, mapInstance);
+}
+
+export function setMarkerFilterModeEnabled(enabled) {
+    if (!mapInstance) {
+        console.warn('[LeafletInterop] Cannot toggle marker filter mode - map not initialized');
+        return false;
+    }
+    return MarkerManager.setMarkerFilterModeEnabled(enabled, mapInstance);
+}
+
 export function jumpToMarker(markerId) {
     return MarkerManager.jumpToMarker(markerId, mapInstance);
 }

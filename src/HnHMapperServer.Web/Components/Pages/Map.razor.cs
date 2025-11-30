@@ -128,6 +128,8 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private bool showVClaim = false; // Village claims (orange) - off by default
     private bool showProvince = false; // Province overlay - off by default
     private bool showThingwallHighlight = false; // Thingwall highlighting (cyan) - off by default
+    private bool showQuestGiverHighlight = false; // Quest giver highlighting (green) - off by default
+    private bool showMarkerFilterMode = false; // Marker filter mode - off by default
     private bool showRoads = true; // Roads visibility - on by default
     private int contextMenuX = 0;
     private int contextMenuY = 0;
@@ -2314,6 +2316,30 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         if (success)
         {
             showThingwallHighlight = newState;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ToggleQuestGiverHighlight()
+    {
+        leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+        var newState = !showQuestGiverHighlight;
+        var success = await leafletModule.InvokeAsync<bool>("setQuestGiverHighlightEnabled", newState);
+        if (success)
+        {
+            showQuestGiverHighlight = newState;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ToggleMarkerFilterMode()
+    {
+        leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+        var newState = !showMarkerFilterMode;
+        var success = await leafletModule.InvokeAsync<bool>("setMarkerFilterModeEnabled", newState);
+        if (success)
+        {
+            showMarkerFilterMode = newState;
             await InvokeAsync(StateHasChanged);
         }
     }
