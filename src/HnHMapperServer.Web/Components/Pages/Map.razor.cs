@@ -2384,6 +2384,22 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
     #endregion
 
+    #region Overlay SSE Event Handlers
+
+    [JSInvokable]
+    public async Task OnOverlayUpdated(OverlayEventDto overlayEvent)
+    {
+        // Invalidate the overlay cache at the specific coordinate and trigger refetch
+        leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+        await leafletModule.InvokeVoidAsync("invalidateOverlayAtCoord",
+            overlayEvent.MapId,
+            overlayEvent.CoordX,
+            overlayEvent.CoordY,
+            overlayEvent.OverlayType);
+    }
+
+    #endregion
+
     #region Road Handlers
 
     private async Task SelectRoad(RoadViewModel road)
@@ -2616,6 +2632,42 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         }
 
         await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task OnMarkerCreated(MarkerEventModel markerEvent)
+    {
+        if (markerEvent.MapId != MapNavigation.CurrentMapId) return;
+        await RefreshMarkersAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnMarkerUpdated(MarkerEventModel markerEvent)
+    {
+        if (markerEvent.MapId != MapNavigation.CurrentMapId) return;
+        await RefreshMarkersAsync();
+    }
+
+    [JSInvokable]
+    public async Task OnMarkerDeleted(System.Text.Json.JsonElement data)
+    {
+        // Game markers are deleted by GridId + position, refresh all markers
+        await RefreshMarkersAsync();
+    }
+
+    private async Task RefreshMarkersAsync()
+    {
+        try
+        {
+            var markers = await MapData.GetMarkersAsync();
+            MarkerState.SetMarkers(markers);
+            await LoadMarkersForCurrentMapAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error refreshing markers");
+        }
     }
 
     private async Task HandleCreateCustomMarkerFromMenu()
