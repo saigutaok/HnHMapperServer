@@ -39,6 +39,10 @@ public static class MapEndpoints
         group.MapPost("/admin/hideMarker", HideMarker);
         group.MapPost("/admin/deleteMarker", DeleteMarker);
 
+        // Overlay offset persistence endpoints
+        group.MapGet("/v1/overlay-offset", GetOverlayOffset);
+        group.MapPost("/v1/overlay-offset", SaveOverlayOffset);
+
         app.MapGet("/map/updates", WatchGridUpdates).RequireAuthorization("TenantMapAccess");
         app.MapGet("/map/grids/{**path}", ServeGridTile)
             .RequireAuthorization("TenantMapAccess")
@@ -296,7 +300,9 @@ public static class MapEndpoints
                     Hidden = m.Hidden,
                     Priority = m.Priority,
                     Revision = revisionCache.Get(m.Id),  // Include current revision for initial cache setup
-                    IsMainMap = config.MainMapId.HasValue && config.MainMapId.Value == m.Id
+                    IsMainMap = config.MainMapId.HasValue && config.MainMapId.Value == m.Id,
+                    DefaultStartX = m.DefaultStartX,
+                    DefaultStartY = m.DefaultStartY
                 },
                 Size = 0  // Size not used in frontend, set to 0
             })
@@ -1072,35 +1078,9 @@ public static class MapEndpoints
 
         if (filePath == null || !File.Exists(filePath))
         {
-            // Check if we should return a transparent PNG instead of 404 (reduces browser console noise)
-            var returnTransparentTile = configuration.GetValue<bool>("ReturnTransparentTilesOnMissing", false);
-            
-            if (returnTransparentTile)
-            {
-                // Return a minimal 1x1 transparent PNG (smallest valid PNG: 67 bytes)
-                // This eliminates browser console 404 errors while maintaining cache benefits
-                var transparentPng = new byte[] {
-                    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-                    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-                    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1 dimensions
-                    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-                    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, // IDAT chunk
-                    0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-                    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, // compressed data
-                    0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, // IEND chunk
-                    0x42, 0x60, 0x82
-                };
-                
-                context.Response.Headers.Append("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
-                context.Response.ContentType = "image/png";
-                return Results.Bytes(transparentPng, "image/png");
-            }
-            else
-            {
-                // Standard 404 response with long cache to reduce repeated requests over unmapped areas (5 minutes)
-                context.Response.Headers.Append("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
-                return Results.NotFound();
-            }
+            // Return 404 with cache to reduce repeated requests over unmapped areas (5 minutes)
+            context.Response.Headers.Append("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
+            return Results.NotFound();
         }
 
         // Get file info for ETag and Last-Modified headers
@@ -1323,4 +1303,40 @@ public static class MapEndpoints
     private record WipeTileRequest(int map, int x, int y);
     private record SetCoordsRequest(int map, int fx, int fy, int tx, int ty);
     private record MarkerIdRequest(int id);
+
+    // Overlay offset endpoints
+    private static async Task<IResult> GetOverlayOffset(
+        [FromQuery] int currentMapId,
+        [FromQuery] int overlayMapId,
+        IOverlayOffsetRepository offsetRepository)
+    {
+        if (currentMapId <= 0 || overlayMapId <= 0)
+            return Results.BadRequest("Invalid map IDs");
+
+        var offset = await offsetRepository.GetOffsetAsync(currentMapId, overlayMapId);
+
+        return offset.HasValue
+            ? Results.Ok(new OverlayOffsetResponse(currentMapId, overlayMapId, offset.Value.offsetX, offset.Value.offsetY))
+            : Results.Ok(new OverlayOffsetResponse(currentMapId, overlayMapId, 0, 0)); // Default to (0,0) if not found
+    }
+
+    private static async Task<IResult> SaveOverlayOffset(
+        [FromBody] SaveOverlayOffsetRequest request,
+        IOverlayOffsetRepository offsetRepository)
+    {
+        if (request.CurrentMapId <= 0 || request.OverlayMapId <= 0)
+            return Results.BadRequest("Invalid map IDs");
+
+        await offsetRepository.SaveOffsetAsync(
+            request.CurrentMapId,
+            request.OverlayMapId,
+            request.OffsetX,
+            request.OffsetY);
+
+        return Results.NoContent();
+    }
+
+    // DTOs for overlay offset
+    private record OverlayOffsetResponse(int CurrentMapId, int OverlayMapId, double OffsetX, double OffsetY);
+    private record SaveOverlayOffsetRequest(int CurrentMapId, int OverlayMapId, double OffsetX, double OffsetY);
 }

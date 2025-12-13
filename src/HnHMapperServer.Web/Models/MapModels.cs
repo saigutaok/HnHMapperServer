@@ -69,6 +69,8 @@ public class MapMetadata
     public int Priority { get; set; }
     public int Revision { get; set; } = 1; // Default revision for cache busting
     public bool IsMainMap { get; set; }
+    public int? DefaultStartX { get; set; }
+    public int? DefaultStartY { get; set; }
 }
 
 public class TileUpdate

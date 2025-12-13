@@ -37,8 +37,8 @@
                 <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width: 100%;">
                     <MudStack Row="false" Spacing="0" Style="flex: 1; min-width: 0;">
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                            <MudIcon Icon="@Icons.Material.Filled.Timeline" Size="Size.Small" Color="Color.Warning" />
-                            <MudText Typo="Typo.body2">@road.Name</MudText>
+                            <div style="width: 12px; height: 12px; border-radius: 50%; background-color: @GetRoadColor(road.Id); flex-shrink: 0;"></div>
+                            <MudText Typo="Typo.body2" Style="overflow: hidden; text-overflow: ellipsis;">@road.Name</MudText>
                         </MudStack>
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
                             @GetMapName(road.MapId) • @road.WaypointCount waypoint(s) • @road.RelativeTime

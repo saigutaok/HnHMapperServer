@@ -73,6 +73,57 @@
         }
     </div>
 
+    <!-- Overlay Offset Controls (only visible when overlay map is selected) -->
+    @if (OverlayMap != null)
+    {
+        <div class="overlay-offset-controls">
+            <MudText Typo="Typo.body2" Class="mb-2">Overlay Offset</MudText>
+            <MudStack Spacing="2">
+                <!-- X Offset -->
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudText Typo="Typo.caption" Style="width: 20px; flex-shrink: 0;">X</MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardDoubleArrowLeft" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(-10, 0))" Title="-10" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(-1, 0))" Title="-1" />
+                    <MudTextField T="double" Value="@OverlayOffsetX" ValueChanged="@OnOffsetXChangedInternal"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Style="width: 80px; flex-shrink: 0;" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(1, 0))" Title="+1" />
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardDoubleArrowRight" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(10, 0))" Title="+10" />
+                </MudStack>
+                <!-- Y Offset -->
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudText Typo="Typo.caption" Style="width: 20px; flex-shrink: 0;">Y</MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardDoubleArrowLeft" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(0, -10))" Title="-10" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(0, -1))" Title="-1" />
+                    <MudTextField T="double" Value="@OverlayOffsetY" ValueChanged="@OnOffsetYChangedInternal"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Style="width: 80px; flex-shrink: 0;" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(0, 1))" Title="+1" />
+                    <MudIconButton Icon="@Icons.Material.Filled.KeyboardDoubleArrowRight" Size="Size.Small"
+                                   OnClick="@(() => NudgeOffset(0, 10))" Title="+10" />
+                </MudStack>
+                <MudStack Row="true" Spacing="2">
+                    <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@ResetOffsetInternal"
+                               StartIcon="@Icons.Material.Filled.Refresh">
+                        Reset
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Size="Size.Small" Color="Color.Primary"
+                               OnClick="@SaveOffsetInternal"
+                               StartIcon="@Icons.Material.Filled.Save">
+                        Save Offset
+                    </MudButton>
+                </MudStack>
+            </MudStack>
+        </div>
+    }
+
     <MudDivider />
 
     <!-- Zoom Controls -->
@@ -167,6 +218,31 @@
     /// </summary>
     [Parameter] public EventCallback<bool> OnToggleGridCoordinates { get; set; }
 
+    /// <summary>
+    /// Current overlay X offset
+    /// </summary>
+    [Parameter] public double OverlayOffsetX { get; set; }
+
+    /// <summary>
+    /// Current overlay Y offset
+    /// </summary>
+    [Parameter] public double OverlayOffsetY { get; set; }
+
+    /// <summary>
+    /// Event callback when overlay X offset changes
+    /// </summary>
+    [Parameter] public EventCallback<double> OnOverlayOffsetXChanged { get; set; }
+
+    /// <summary>
+    /// Event callback when overlay Y offset changes
+    /// </summary>
+    [Parameter] public EventCallback<double> OnOverlayOffsetYChanged { get; set; }
+
+    /// <summary>
+    /// Event callback when save offset button is clicked
+    /// </summary>
+    [Parameter] public EventCallback OnSaveOverlayOffset { get; set; }
+
     // Inline dropdown state toggles
     private bool showMapDropdown = false;
     private bool showOverlayDropdown = false;
@@ -181,6 +257,39 @@
     {
         showOverlayDropdown = false;
         await OnOverlayMapSelected.InvokeAsync(map);
+    }
+
+    private async Task OnOffsetXChangedInternal(double value)
+    {
+        await OnOverlayOffsetXChanged.InvokeAsync(value);
+    }
+
+    private async Task OnOffsetYChangedInternal(double value)
+    {
+        await OnOverlayOffsetYChanged.InvokeAsync(value);
+    }
+
+    private async Task NudgeOffset(double deltaX, double deltaY)
+    {
+        if (deltaX != 0)
+        {
+            await OnOverlayOffsetXChanged.InvokeAsync(Math.Round((OverlayOffsetX + deltaX) * 100) / 100);
+        }
+        if (deltaY != 0)
+        {
+            await OnOverlayOffsetYChanged.InvokeAsync(Math.Round((OverlayOffsetY + deltaY) * 100) / 100);
+        }
+    }
+
+    private async Task ResetOffsetInternal()
+    {
+        await OnOverlayOffsetXChanged.InvokeAsync(0.0);
+        await OnOverlayOffsetYChanged.InvokeAsync(0.0);
+    }
+
+    private async Task SaveOffsetInternal()
+    {
+        await OnSaveOverlayOffset.InvokeAsync();
     }
 }
 

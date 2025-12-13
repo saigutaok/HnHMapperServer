@@ -1,0 +1,103 @@
+@using MudBlazor
+
+<!-- Navigation Route Panel -->
+@if (IsVisible && Route != null)
+{
+    <MudPaper Class="pa-3 mb-3" Elevation="2">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Filled.Navigation" Color="Color.Primary" />
+                <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Route</MudText>
+            </MudStack>
+            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                          Size="Size.Small"
+                          OnClick="@(() => OnClearRoute.InvokeAsync())"
+                          Title="Clear route" />
+        </MudStack>
+
+        @if (!string.IsNullOrEmpty(Route.Error))
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                @Route.Error
+            </MudAlert>
+        }
+        else if (Route.Segments != null && Route.Segments.Count > 0)
+        {
+            <!-- Route Summary -->
+            <MudStack Row="true" Spacing="3" Class="mb-3">
+                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                    ~@FormatDistance(Route.TotalDistance)
+                </MudChip>
+                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
+                    @Route.Segments.Count road(s)
+                </MudChip>
+            </MudStack>
+
+            <!-- Road List -->
+            <MudList T="string" Dense="true">
+                @foreach (var (segment, index) in Route.Segments.Select((s, i) => (s, i)))
+                {
+                    <MudListItem T="string" OnClick="@(() => OnJumpToRoad.InvokeAsync(segment.RoadId))" Style="cursor: pointer;">
+                        <MudStack Row="false" Spacing="0">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                <!-- Step number -->
+                                <MudAvatar Size="Size.Small" Style="@GetStepStyle(index)">
+                                    @(index + 1)
+                                </MudAvatar>
+                                <!-- Road name -->
+                                <MudText Typo="Typo.body2" Style="font-weight: 500;">
+                                    @segment.RoadName
+                                </MudText>
+                            </MudStack>
+                            <!-- Distance info -->
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-9">
+                                @if (segment.JumpDistance > 0)
+                                {
+                                    <span>Jump: @FormatDistance(segment.JumpDistance)</span>
+                                    <span> | </span>
+                                }
+                                Road: @FormatDistance(segment.RoadLength)
+                            </MudText>
+                        </MudStack>
+                    </MudListItem>
+
+                    @if (index < Route.Segments.Count - 1)
+                    {
+                        <!-- Arrow between roads -->
+                        <div class="d-flex justify-center my-1">
+                            <MudIcon Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small" Color="Color.Secondary" />
+                        </div>
+                    }
+                }
+            </MudList>
+
+            @if (Route.Segments.Count > 0 && Route.Segments.Last().FinalJumpDistance > 0)
+            {
+                <!-- Final jump to destination -->
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2 pa-2" Style="background: rgba(239, 68, 68, 0.1); border-radius: 4px;">
+                    <MudIcon Icon="@Icons.Material.Filled.Flag" Color="Color.Error" Size="Size.Small" />
+                    <MudText Typo="Typo.caption">
+                        Final jump to destination: @FormatDistance(Route.Segments.Last().FinalJumpDistance)
+                    </MudText>
+                </MudStack>
+            }
+        }
+        else if (Route.Message != null)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true">
+                @Route.Message
+            </MudAlert>
+        }
+
+        <!-- Clear button -->
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Secondary"
+                   Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Clear"
+                   OnClick="@(() => OnClearRoute.InvokeAsync())"
+                   FullWidth="true"
+                   Class="mt-3">
+            Clear Route
+        </MudButton>
+    </MudPaper>
+}

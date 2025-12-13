@@ -25,6 +25,16 @@ public class AdminMapDto
     /// Display priority (lower numbers appear first).
     /// </summary>
     public int Priority { get; set; }
+
+    /// <summary>
+    /// Default starting X coordinate when opening this map without URL parameters.
+    /// </summary>
+    public int? DefaultStartX { get; set; }
+
+    /// <summary>
+    /// Default starting Y coordinate when opening this map without URL parameters.
+    /// </summary>
+    public int? DefaultStartY { get; set; }
 }
 
 /// <summary>

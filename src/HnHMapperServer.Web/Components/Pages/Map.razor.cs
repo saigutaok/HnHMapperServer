@@ -147,6 +147,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private bool isDrawingRoad = false;
     private int drawingPointsCount = 0;
 
+    // Navigation state
+    private RouteResult? currentRoute = null;
+    private (int coordX, int coordY, int x, int y)? navigationStartPoint = null;
+
     // Map action menu context (for marker/ping creation)
     private int mapActionMapId = 0;
     private int mapActionCoordX = 0;
@@ -163,6 +167,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private IReadOnlyList<CharacterModel> allCharacters => CharacterTracking.AllCharacters;
     private bool isFollowing => CharacterTracking.IsFollowing;
     private int? followingCharacterId => CharacterTracking.FollowingCharacterId;
+
+    // My character identification (persisted in localStorage)
+    private string? myCharacterName;
 
     private string PlayerFilter
     {
@@ -356,6 +363,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
                 // Load hidden marker groups from localStorage
                 await LoadHiddenMarkerGroupsAsync();
 
+                // Load "my character" name from localStorage
+                await LoadMyCharacterAsync();
+
                 // NOTE: SSE initialization moved to HandleMapInitialized
                 // because mapView component reference is not available until Leaflet fires its 'load' event
             }
@@ -407,14 +417,16 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         }
         else if (MapNavigation.Maps.Count > 0)
         {
-            var firstMapId = MapNavigation.Maps[0].ID;
-            Logger.LogInformation("No URL params, using default position (0, 0, 7) on map {MapId}", firstMapId);
-            MapNavigation.ChangeMap(firstMapId);
-            state.CurrentMapId = firstMapId;
-            await mapView.ChangeMapAsync(firstMapId);
-            await mapView.SetViewAsync(0, 0, 7);
+            var firstMap = MapNavigation.Maps[0];
+            var startX = firstMap.MapInfo.DefaultStartX ?? 0;
+            var startY = firstMap.MapInfo.DefaultStartY ?? 0;
+            Logger.LogInformation("No URL params, using default position ({X}, {Y}, 7) on map {MapId}", startX, startY, firstMap.ID);
+            MapNavigation.ChangeMap(firstMap.ID);
+            state.CurrentMapId = firstMap.ID;
+            await mapView.ChangeMapAsync(firstMap.ID);
+            await mapView.SetViewAsync(startX, startY, 7);
             // Synchronize MapNavigationService state to prevent position resets
-            MapNavigation.UpdatePosition(0, 0, 7);
+            MapNavigation.UpdatePosition(startX, startY, 7);
         }
         else
         {
@@ -928,10 +940,15 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     {
         if (mapView != null && MapNavigation.Maps.Count > 0)
         {
+            // Find the current map to get its default starting position
+            var currentMap = MapNavigation.Maps.FirstOrDefault(m => m.ID == MapNavigation.CurrentMapId);
+            var startX = currentMap?.MapInfo.DefaultStartX ?? 0;
+            var startY = currentMap?.MapInfo.DefaultStartY ?? 0;
+
             await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
-            await mapView.SetViewAsync(0, 0, 7);
-            MapNavigation.UpdatePosition(0, 0, 7);
-            Navigation.NavigateTo(MapNavigation.GetUrl(MapNavigation.CurrentMapId, 0, 0, 7), false);
+            await mapView.SetViewAsync(startX, startY, 7);
+            MapNavigation.UpdatePosition(startX, startY, 7);
+            Navigation.NavigateTo(MapNavigation.GetUrl(MapNavigation.CurrentMapId, startX, startY, 7), false);
         }
     }
 
@@ -945,10 +962,12 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
             await RebuildMarkersForCurrentMap();
 
-            var cx = (int)MapNavigation.CenterX;
-            var cy = (int)MapNavigation.CenterY;
-            await mapView.SetViewAsync(cx, cy, MapNavigation.Zoom);
-            Navigation.NavigateTo(MapNavigation.GetUrl(map.ID, cx, cy, MapNavigation.Zoom), false);
+            // Use the map's default starting position, or (0, 0) if not set
+            var startX = map.MapInfo.DefaultStartX ?? 0;
+            var startY = map.MapInfo.DefaultStartY ?? 0;
+            await mapView.SetViewAsync(startX, startY, 7);
+            MapNavigation.UpdatePosition(startX, startY, 7);
+            Navigation.NavigateTo(MapNavigation.GetUrl(map.ID, startX, startY, 7), false);
 
             CustomMarkerState.MarkAsNeedingRender();
             await TryRenderPendingCustomMarkersAsync();
@@ -961,9 +980,39 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         if (mapView != null)
         {
             MapNavigation.ChangeOverlayMap(map?.ID);
-            await mapView.SetOverlayMapAsync(map?.ID);
+
+            // Load saved offset from API when overlay map is selected
+            if (map != null && MapNavigation.CurrentMapId > 0)
+            {
+                try
+                {
+                    var httpClient = HttpClientFactory.CreateClient("API");
+                    var response = await httpClient.GetAsync(
+                        $"/map/api/v1/overlay-offset?currentMapId={MapNavigation.CurrentMapId}&overlayMapId={map.ID}");
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var offset = await response.Content.ReadFromJsonAsync<OverlayOffsetResponse>(CamelCaseJsonOptions);
+                        if (offset != null)
+                        {
+                            MapNavigation.OverlayOffsetX = offset.OffsetX;
+                            MapNavigation.OverlayOffsetY = offset.OffsetY;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to load overlay offset for maps {CurrentMapId}/{OverlayMapId}",
+                        MapNavigation.CurrentMapId, map.ID);
+                }
+            }
+
+            await mapView.SetOverlayMapAsync(map?.ID, MapNavigation.OverlayOffsetX, MapNavigation.OverlayOffsetY);
         }
     }
+
+    // DTO for overlay offset response
+    private record OverlayOffsetResponse(int CurrentMapId, int OverlayMapId, double OffsetX, double OffsetY);
 
     private async Task HandleMapSelectedInternal(MapInfoModel? map)
     {
@@ -978,6 +1027,56 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     {
         OverlayMap = map;
         await HandleOverlayMapSelected(map);
+    }
+
+    private async Task HandleOverlayOffsetXChanged(double offsetX)
+    {
+        MapNavigation.OverlayOffsetX = offsetX;
+        if (mapView != null)
+        {
+            await mapView.SetOverlayOffsetAsync(MapNavigation.OverlayOffsetX, MapNavigation.OverlayOffsetY);
+        }
+    }
+
+    private async Task HandleOverlayOffsetYChanged(double offsetY)
+    {
+        MapNavigation.OverlayOffsetY = offsetY;
+        if (mapView != null)
+        {
+            await mapView.SetOverlayOffsetAsync(MapNavigation.OverlayOffsetX, MapNavigation.OverlayOffsetY);
+        }
+    }
+
+    private async Task HandleSaveOverlayOffset()
+    {
+        await SaveOverlayOffsetAsync();
+    }
+
+    private async Task SaveOverlayOffsetAsync()
+    {
+        if (MapNavigation.OverlayMapId is not { } overlayMapId || overlayMapId <= 0)
+            return;
+
+        if (MapNavigation.CurrentMapId <= 0)
+            return;
+
+        try
+        {
+            var httpClient = HttpClientFactory.CreateClient("API");
+            var request = new
+            {
+                CurrentMapId = MapNavigation.CurrentMapId,
+                OverlayMapId = overlayMapId,
+                OffsetX = MapNavigation.OverlayOffsetX,
+                OffsetY = MapNavigation.OverlayOffsetY
+            };
+
+            await httpClient.PostAsJsonAsync("/map/api/v1/overlay-offset", request);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to save overlay offset");
+        }
     }
 
     private async Task HandleToggleGridCoordinates(bool value)
@@ -1160,6 +1259,91 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         {
             Logger.LogWarning(ex, "Failed to load hidden marker groups from localStorage");
         }
+    }
+
+    private async Task LoadMyCharacterAsync()
+    {
+        try
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+            myCharacterName = await leafletModule.InvokeAsync<string?>("getMyCharacter");
+            Logger.LogDebug("Loaded my character from localStorage: {Name}", myCharacterName ?? "(none)");
+
+            // Sync to JavaScript for marker highlighting (gold glow + bigger size)
+            if (!string.IsNullOrEmpty(myCharacterName))
+            {
+                await leafletModule.InvokeVoidAsync("setMyCharacterForHighlight", myCharacterName);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load my character from localStorage");
+        }
+    }
+
+    private async Task SetMyCharacterAsync(string? characterName)
+    {
+        try
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+            await leafletModule.InvokeVoidAsync("setMyCharacter", characterName);
+            myCharacterName = characterName;
+
+            // Sync to JavaScript for marker highlighting (gold glow + bigger size)
+            await leafletModule.InvokeVoidAsync("setMyCharacterForHighlight", characterName);
+
+            if (characterName != null)
+            {
+                Snackbar.Add($"Set '{characterName}' as your character", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Cleared character selection", Severity.Info);
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to save my character to localStorage");
+            Snackbar.Add("Failed to save character selection", Severity.Error);
+        }
+    }
+
+    /// <summary>
+    /// Follow "my character" on the map - triggered by the FAB button
+    /// </summary>
+    private async Task FollowMyCharacterAsync()
+    {
+        if (string.IsNullOrEmpty(myCharacterName))
+        {
+            Snackbar.Add("Set your character first in the Players panel", Severity.Warning);
+            return;
+        }
+
+        var myChar = CharacterTracking.AllCharacters.FirstOrDefault(c => c.Name == myCharacterName);
+        if (myChar != null)
+        {
+            await SelectPlayer(myChar); // Existing method that starts following
+        }
+        else
+        {
+            Snackbar.Add($"'{myCharacterName}' is not online", Severity.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Get button color for "Follow My Character" FAB
+    /// </summary>
+    private Color GetFollowMyCharacterButtonColor()
+    {
+        if (string.IsNullOrEmpty(myCharacterName)) return Color.Default;
+
+        // Check if already following my character
+        var myChar = CharacterTracking.AllCharacters.FirstOrDefault(c => c.Name == myCharacterName);
+        if (myChar != null && followingCharacterId == myChar.Id) return Color.Success;
+
+        return Color.Warning; // Gold/yellow to match the marker
     }
 
     private async Task HandleStateChanged()
@@ -2408,7 +2592,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         if (road == null) return;
         HideAllContextMenus();
         leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
-        await leafletModule.InvokeVoidAsync("jumpToRoad", road.Id);
+        await leafletModule.InvokeVoidAsync("selectRoad", road.Id);
     }
 
     private async Task ShowEditRoadDialog(RoadViewModel road)
@@ -2602,6 +2786,127 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error refreshing roads");
+        }
+    }
+
+    #endregion
+
+    #region Navigation Handlers
+
+    private async Task HandleNavigateHereFromMenu()
+    {
+        HideAllContextMenus();
+
+        if (allRoads.Count == 0)
+        {
+            Snackbar.Add("No roads available for navigation", Severity.Warning);
+            return;
+        }
+
+        // Require "my character" to be set for navigation
+        if (string.IsNullOrEmpty(myCharacterName))
+        {
+            Snackbar.Add("Set your character first in the Players panel to use navigation", Severity.Warning);
+            return;
+        }
+
+        // Find "my character" - must be online
+        var myChar = CharacterTracking.AllCharacters.FirstOrDefault(c => c.Name == myCharacterName);
+        if (myChar == null)
+        {
+            Snackbar.Add($"'{myCharacterName}' is not online. Navigation requires your character to be visible.", Severity.Warning);
+            return;
+        }
+
+        Logger.LogDebug("Using my character '{Name}' as navigation start", myCharacterName);
+
+        // Position.X and Position.Y are absolute coordinates, convert to grid format
+        int charCoordX = myChar.Position.X / 100;
+        int charCoordY = myChar.Position.Y / 100;
+        int charX = myChar.Position.X % 100;
+        int charY = myChar.Position.Y % 100;
+        var startPoint = (coordX: charCoordX, coordY: charCoordY, x: charX, y: charY);
+
+        // Destination is the right-click location
+        var endPoint = new { coordX = mapActionCoordX, coordY = mapActionCoordY, x = mapActionX, y = mapActionY };
+
+        Logger.LogInformation("Navigation: Start ({CoordX},{CoordY},{X},{Y}) -> End ({ECoordX},{ECoordY},{EX},{EY}), Roads count: {RoadsCount}",
+            startPoint.coordX, startPoint.coordY, startPoint.x, startPoint.y,
+            mapActionCoordX, mapActionCoordY, mapActionX, mapActionY,
+            allRoads.Count);
+
+        try
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+
+            // Call JavaScript to find route
+            var routeResult = await leafletModule.InvokeAsync<RouteResult>("findRoute",
+                new { coordX = startPoint.coordX, coordY = startPoint.coordY, x = startPoint.x, y = startPoint.y },
+                endPoint);
+
+            Logger.LogInformation("Navigation result: Success={Success}, Segments={SegmentCount}, Error={Error}",
+                routeResult?.Success, routeResult?.Segments?.Count ?? 0, routeResult?.Error ?? "none");
+
+            if (routeResult == null || routeResult.Segments == null || routeResult.Segments.Count == 0)
+            {
+                if (!string.IsNullOrEmpty(routeResult?.Error))
+                {
+                    Snackbar.Add(routeResult.Error, Severity.Warning);
+                }
+                else
+                {
+                    Snackbar.Add("No route found", Severity.Warning);
+                }
+                return;
+            }
+
+            currentRoute = routeResult;
+
+            // Calculate absolute coordinates for highlighting
+            var startAbs = new { x = startPoint.coordX * 100 + startPoint.x, y = startPoint.coordY * 100 + startPoint.y };
+            var endAbs = new { x = endPoint.coordX * 100 + endPoint.x, y = endPoint.coordY * 100 + endPoint.y };
+
+            // Highlight the route on the map
+            var roadIds = routeResult.Segments.Select(s => s.RoadId).ToArray();
+            await leafletModule.InvokeVoidAsync("highlightRoute", roadIds, startAbs, endAbs);
+
+            Snackbar.Add($"Route found: {routeResult.Segments.Count} road(s)", Severity.Success);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error calculating navigation route");
+            Snackbar.Add("Error calculating route", Severity.Error);
+        }
+    }
+
+    private async Task HandleClearRoute()
+    {
+        currentRoute = null;
+
+        try
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+            await leafletModule.InvokeVoidAsync("clearRouteHighlight");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error clearing route highlight");
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleJumpToRouteRoad(int roadId)
+    {
+        try
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+            await leafletModule.InvokeVoidAsync("jumpToRoad", roadId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error jumping to road {RoadId}", roadId);
         }
     }
 

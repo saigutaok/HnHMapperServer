@@ -145,8 +145,10 @@
                           Maps="@Maps"
                           IsFollowing="@IsFollowing"
                           FollowingCharacterId="@FollowingCharacterId"
+                          MyCharacterName="@MyCharacterName"
                           OnPlayerSelected="@OnPlayerSelected"
-                          OnStopFollowing="@OnStopFollowing" />
+                          OnStopFollowing="@OnStopFollowing"
+                          OnSetMyCharacter="@OnSetMyCharacter" />
         }
         else if (CurrentMode == SidebarMode.Markers)
         {
@@ -186,7 +188,12 @@
                        OnZoomIn="@OnZoomIn"
                        OnZoomOut="@OnZoomOut"
                        OnResetView="@OnResetView"
-                       OnToggleGridCoordinates="@OnToggleGridCoordinates" />
+                       OnToggleGridCoordinates="@OnToggleGridCoordinates"
+                       OverlayOffsetX="@OverlayOffsetX"
+                       OverlayOffsetY="@OverlayOffsetY"
+                       OnOverlayOffsetXChanged="@OnOverlayOffsetXChanged"
+                       OnOverlayOffsetYChanged="@OnOverlayOffsetYChanged"
+                       OnSaveOverlayOffset="@OnSaveOverlayOffset" />
         }
         else if (CurrentMode == SidebarMode.Events)
         {
@@ -265,7 +272,17 @@
     /// ID of the character being followed (null if not following)
     /// </summary>
     [Parameter] public int? FollowingCharacterId { get; set; }
-    
+
+    /// <summary>
+    /// Name of the character the user identifies as (persisted in localStorage)
+    /// </summary>
+    [Parameter] public string? MyCharacterName { get; set; }
+
+    /// <summary>
+    /// Callback when user sets/clears their character
+    /// </summary>
+    [Parameter] public EventCallback<string?> OnSetMyCharacter { get; set; }
+
     /// <summary>
     /// Currently selected map (for Maps panel)
     /// </summary>
@@ -279,6 +296,11 @@
     // Event callbacks for map selection and controls
     [Parameter] public EventCallback<MapInfoModel?> OnMapSelected { get; set; }
     [Parameter] public EventCallback<MapInfoModel?> OnOverlayMapSelected { get; set; }
+    [Parameter] public double OverlayOffsetX { get; set; }
+    [Parameter] public double OverlayOffsetY { get; set; }
+    [Parameter] public EventCallback<double> OnOverlayOffsetXChanged { get; set; }
+    [Parameter] public EventCallback<double> OnOverlayOffsetYChanged { get; set; }
+    [Parameter] public EventCallback OnSaveOverlayOffset { get; set; }
     [Parameter] public EventCallback OnZoomIn { get; set; }
     [Parameter] public EventCallback OnZoomOut { get; set; }
     [Parameter] public EventCallback OnResetView { get; set; }

@@ -16,19 +16,48 @@ let currentDrawingPoints = [];
 let tempPolyline = null;
 let tempMarkers = [];
 
+// Selection state
+let selectedRoadId = null;
+let selectionTimeout = null;
+let selectionLabelMarker = null;
+const SELECTION_FLASH_DURATION = 1500; // 3 flashes at 0.5s each
+const SELECTION_DISPLAY_DURATION = 5000; // How long to keep selection visible
+
 // Safely invoke .NET methods from JS
 let invokeDotNetSafe = null;
 let mapInstanceRef = null;
 
-// Visual styles
-const ROAD_STYLE = {
-    color: '#FFFFFF', // White
-    weight: 4,
-    opacity: 0.85
-};
+// Color palette for unique road colors (16 distinct colors)
+const ROAD_COLOR_PALETTE = [
+    '#FF6B6B',  // Coral red
+    '#4ECDC4',  // Teal
+    '#FFE66D',  // Yellow
+    '#95E1D3',  // Mint
+    '#F38181',  // Salmon
+    '#AA96DA',  // Lavender
+    '#FCBAD3',  // Pink
+    '#A8D8EA',  // Light blue
+    '#FF9F43',  // Orange
+    '#5CD85A',  // Green
+    '#DDA0DD',  // Plum
+    '#87CEEB',  // Sky blue
+    '#F0E68C',  // Khaki
+    '#98D8C8',  // Seafoam
+    '#C9B1FF',  // Periwinkle
+    '#FFB6C1'   // Light pink
+];
 
+/**
+ * Get deterministic color for a road based on its ID
+ * @param {number} roadId - Road ID
+ * @returns {string} - Hex color code
+ */
+function getRoadColor(roadId) {
+    return ROAD_COLOR_PALETTE[roadId % ROAD_COLOR_PALETTE.length];
+}
+
+// Visual styles (hover only - base style uses per-road color)
 const ROAD_HOVER_STYLE = {
-    color: '#E0E0E0', // Light gray for hover
     weight: 6,
     opacity: 1
 };
@@ -153,9 +182,14 @@ export function addRoad(road, mapInstance) {
     try {
         const latlngs = waypointsToLatLngs(normalized.waypoints, mapInstance);
 
-        // Create polyline for the road
+        // Get unique color for this road based on ID
+        const roadColor = getRoadColor(normalized.id);
+
+        // Create polyline for the road with unique color
         const polyline = L.polyline(latlngs, {
-            ...ROAD_STYLE,
+            color: roadColor,
+            weight: 4,
+            opacity: 0.85,
             interactive: true
         });
 
@@ -168,22 +202,30 @@ export function addRoad(road, mapInstance) {
             className: 'road-tooltip'
         });
 
-        // Create waypoint markers (hidden by default, shown on hover)
+        // Create waypoint markers (hidden by default, shown on hover or selection)
         const waypointMarkers = createWaypointMarkers(normalized.waypoints, mapInstance);
         const waypointLayer = L.layerGroup(waypointMarkers);
 
-        // Hover effect - highlight road and show waypoints
+        // Hover effect - highlight road and show waypoints (unless selected)
         polyline.on('mouseover', () => {
             polyline.setStyle(ROAD_HOVER_STYLE);
-            if (!mapInstance.hasLayer(waypointLayer)) {
+            // Only show waypoints on hover if this road is not currently selected
+            if (selectedRoadId !== normalized.id && !mapInstance.hasLayer(waypointLayer)) {
                 waypointLayer.addTo(mapInstance);
             }
         });
 
         polyline.on('mouseout', () => {
-            polyline.setStyle(ROAD_STYLE);
-            if (mapInstance.hasLayer(waypointLayer)) {
-                mapInstance.removeLayer(waypointLayer);
+            // Restore original style (unless selected)
+            if (selectedRoadId !== normalized.id) {
+                polyline.setStyle({
+                    color: roadColor,
+                    weight: 4,
+                    opacity: 0.85
+                });
+                if (mapInstance.hasLayer(waypointLayer)) {
+                    mapInstance.removeLayer(waypointLayer);
+                }
             }
         });
 
@@ -198,11 +240,12 @@ export function addRoad(road, mapInstance) {
             }
         });
 
-        // Store road data
+        // Store road data with color for restoration after hover/selection
         roads[normalized.id] = {
             polyline,
             waypointLayer,
-            data: normalized
+            data: normalized,
+            color: roadColor
         };
 
         roadLayer.addLayer(polyline);
@@ -302,7 +345,7 @@ export function toggleRoads(visible, mapInstance) {
 }
 
 /**
- * Jump map view to a road
+ * Jump map view to a road (legacy - prefer selectRoad for visual feedback)
  * @param {number} roadId - Road ID to jump to
  * @param {object} mapInstance - Leaflet map instance
  * @returns {boolean} - True if road was found
@@ -317,6 +360,355 @@ export function jumpToRoad(roadId, mapInstance) {
     const bounds = roadData.polyline.getBounds();
     mapInstance.fitBounds(bounds, { padding: [50, 50] });
     return true;
+}
+
+/**
+ * Select a road - flash highlight, show label and waypoints
+ * @param {number} roadId - Road ID to select
+ * @param {object} mapInstance - Leaflet map instance
+ * @returns {boolean} - True if road was found and selected
+ */
+export function selectRoad(roadId, mapInstance) {
+    const roadData = roads[roadId];
+    if (!roadData) {
+        console.warn('[Road] selectRoad failed; road not found', roadId);
+        return false;
+    }
+
+    // Clear previous selection if exists
+    clearRoadSelection();
+
+    // Store selection state
+    selectedRoadId = roadId;
+
+    // Apply selected style (brighter, thicker)
+    roadData.polyline.setStyle({
+        weight: 6,
+        opacity: 1
+    });
+
+    // Get the polyline SVG element and add flash class
+    const polylineElement = roadData.polyline.getElement();
+    if (polylineElement) {
+        polylineElement.classList.add('road-selected-flash');
+    }
+
+    // Show waypoint markers (without animation - just show them)
+    if (!mapInstance.hasLayer(roadData.waypointLayer)) {
+        roadData.waypointLayer.addTo(mapInstance);
+    }
+
+    // Create a prominent label at the center of the road
+    const latlngs = roadData.polyline.getLatLngs();
+    if (latlngs && latlngs.length > 0) {
+        // Find the middle point of the road
+        const midIndex = Math.floor(latlngs.length / 2);
+        const midPoint = latlngs[midIndex];
+
+        // Create a label marker with the road name
+        selectionLabelMarker = L.marker(midPoint, {
+            icon: L.divIcon({
+                className: 'road-selection-label-container',
+                html: `<div class="road-selected-label" style="border-color: ${roadData.color}; box-shadow: 0 0 12px ${roadData.color}, 0 4px 12px rgba(0,0,0,0.5);">${roadData.data.name}</div>`,
+                iconSize: null,
+                iconAnchor: [0, 0]
+            }),
+            interactive: false,
+            zIndexOffset: 1000
+        });
+        selectionLabelMarker.addTo(mapInstance);
+    }
+
+    // Clear selection after timeout
+    selectionTimeout = setTimeout(() => {
+        if (selectedRoadId === roadId) {
+            // Remove flash class
+            if (polylineElement) {
+                polylineElement.classList.remove('road-selected-flash');
+            }
+
+            // Hide waypoints
+            if (mapInstance.hasLayer(roadData.waypointLayer)) {
+                mapInstance.removeLayer(roadData.waypointLayer);
+            }
+
+            // Remove label
+            if (selectionLabelMarker && mapInstance.hasLayer(selectionLabelMarker)) {
+                mapInstance.removeLayer(selectionLabelMarker);
+                selectionLabelMarker = null;
+            }
+
+            // Reset style
+            roadData.polyline.setStyle({
+                color: roadData.color,
+                weight: 4,
+                opacity: 0.85
+            });
+
+            selectedRoadId = null;
+        }
+    }, SELECTION_DISPLAY_DURATION);
+
+    // Fit bounds to road
+    const bounds = roadData.polyline.getBounds();
+    mapInstance.fitBounds(bounds, { padding: [50, 50] });
+
+    console.log('[Road] Selected road:', roadId, 'color:', roadData.color);
+    return true;
+}
+
+/**
+ * Clear current road selection
+ */
+export function clearRoadSelection() {
+    // Clear timeout
+    if (selectionTimeout) {
+        clearTimeout(selectionTimeout);
+        selectionTimeout = null;
+    }
+
+    // Remove label marker
+    if (selectionLabelMarker && mapInstanceRef && mapInstanceRef.hasLayer(selectionLabelMarker)) {
+        mapInstanceRef.removeLayer(selectionLabelMarker);
+        selectionLabelMarker = null;
+    }
+
+    // Reset previous selection if exists
+    if (selectedRoadId !== null && roads[selectedRoadId]) {
+        const roadData = roads[selectedRoadId];
+
+        // Remove flash class
+        const polylineElement = roadData.polyline.getElement();
+        if (polylineElement) {
+            polylineElement.classList.remove('road-selected-flash');
+        }
+
+        // Reset style to original color
+        roadData.polyline.setStyle({
+            color: roadData.color,
+            weight: 4,
+            opacity: 0.85
+        });
+
+        // Remove waypoint layer if visible
+        if (mapInstanceRef && mapInstanceRef.hasLayer(roadData.waypointLayer)) {
+            mapInstanceRef.removeLayer(roadData.waypointLayer);
+        }
+    }
+
+    selectedRoadId = null;
+}
+
+// ============ Route Navigation Functions ============
+
+// Route highlighting state
+let routeHighlightedRoads = [];
+let routeMarkers = [];
+let startMarker = null;
+let endMarker = null;
+
+/**
+ * Highlight a route (multiple roads) on the map
+ * @param {array} roadIds - Array of road IDs in order
+ * @param {object} startPoint - Start point {x, y} in absolute pixels
+ * @param {object} endPoint - End point {x, y} in absolute pixels
+ * @param {object} mapInstance - Leaflet map instance
+ */
+export function highlightRoute(roadIds, startPoint, endPoint, mapInstance) {
+    if (!mapInstance || !roadLayer) return;
+
+    console.log('[Road] highlightRoute called with', roadIds.length, 'road IDs:', roadIds);
+    console.log('[Road] Available road IDs in roads object:', Object.keys(roads));
+
+    // Clear any existing route highlight
+    clearRouteHighlight(mapInstance);
+
+    // Highlight each road in the route
+    let highlightedCount = 0;
+    roadIds.forEach((roadId, index) => {
+        // Ensure roadId is the correct type (convert to number if needed)
+        const normalizedId = typeof roadId === 'string' ? parseInt(roadId, 10) : roadId;
+
+        let roadData = roads[normalizedId];
+
+        // If not found, try string key as fallback
+        if (!roadData) {
+            roadData = roads[String(roadId)];
+        }
+
+        if (!roadData) {
+            console.warn(`[Road] Road ${roadId} (normalized: ${normalizedId}) not found in roads object for highlighting`);
+            return;
+        }
+
+        highlightedCount++;
+
+        // Store original style
+        const originalColor = roadData.color;
+
+        // Apply route highlight style
+        roadData.polyline.setStyle({
+            weight: 8,
+            opacity: 1
+        });
+
+        // Add route highlight class for animation
+        const polylineElement = roadData.polyline.getElement();
+        if (polylineElement) {
+            polylineElement.classList.add('route-highlighted');
+        }
+
+        // Add numbered marker at the start of each road
+        const endpoints = getRoadEndpointsForRoute(roadData.data);
+        if (endpoints) {
+            const markerPoint = endpoints.start;
+            const latlng = mapInstance.unproject([markerPoint.x, markerPoint.y], HnHMaxZoom);
+
+            const numberMarker = L.marker(latlng, {
+                icon: L.divIcon({
+                    className: 'route-number-marker',
+                    html: `<div class="route-number">${index + 1}</div>`,
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 14]
+                }),
+                interactive: false,
+                zIndexOffset: 2000
+            });
+            numberMarker.addTo(mapInstance);
+            routeMarkers.push(numberMarker);
+        }
+
+        routeHighlightedRoads.push({
+            roadId,
+            originalColor,
+            polyline: roadData.polyline
+        });
+    });
+
+    // Add start marker (green)
+    if (startPoint) {
+        const startLatLng = mapInstance.unproject([startPoint.x, startPoint.y], HnHMaxZoom);
+        startMarker = L.marker(startLatLng, {
+            icon: L.divIcon({
+                className: 'route-start-marker',
+                html: '<div class="route-endpoint-icon start">S</div>',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            }),
+            interactive: false,
+            zIndexOffset: 2500
+        });
+        startMarker.addTo(mapInstance);
+    }
+
+    // Add end marker (red)
+    if (endPoint) {
+        const endLatLng = mapInstance.unproject([endPoint.x, endPoint.y], HnHMaxZoom);
+        endMarker = L.marker(endLatLng, {
+            icon: L.divIcon({
+                className: 'route-end-marker',
+                html: '<div class="route-endpoint-icon end">D</div>',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+            }),
+            interactive: false,
+            zIndexOffset: 2500
+        });
+        endMarker.addTo(mapInstance);
+    }
+
+    console.log('[Road] Route highlighted:', highlightedCount, 'of', roadIds.length, 'roads');
+}
+
+/**
+ * Get road endpoints for route calculation
+ * @param {object} roadData - Road data object
+ * @returns {object} - {start: {x, y}, end: {x, y}}
+ */
+function getRoadEndpointsForRoute(roadData) {
+    let waypoints = roadData.waypoints;
+    if (typeof waypoints === 'string') {
+        try {
+            waypoints = JSON.parse(waypoints);
+        } catch {
+            return null;
+        }
+    }
+
+    if (!waypoints || waypoints.length < 2) return null;
+
+    const TileSize = 100;
+    const firstWp = waypoints[0];
+    const lastWp = waypoints[waypoints.length - 1];
+
+    return {
+        start: {
+            x: (firstWp.coordX ?? firstWp.CoordX ?? 0) * TileSize + (firstWp.x ?? firstWp.X ?? 0),
+            y: (firstWp.coordY ?? firstWp.CoordY ?? 0) * TileSize + (firstWp.y ?? firstWp.Y ?? 0)
+        },
+        end: {
+            x: (lastWp.coordX ?? lastWp.CoordX ?? 0) * TileSize + (lastWp.x ?? lastWp.X ?? 0),
+            y: (lastWp.coordY ?? lastWp.CoordY ?? 0) * TileSize + (lastWp.y ?? lastWp.Y ?? 0)
+        }
+    };
+}
+
+/**
+ * Clear route highlighting
+ * @param {object} mapInstance - Leaflet map instance
+ */
+export function clearRouteHighlight(mapInstance) {
+    // Remove route highlight from roads
+    routeHighlightedRoads.forEach(({ roadId, originalColor, polyline }) => {
+        const polylineElement = polyline.getElement();
+        if (polylineElement) {
+            polylineElement.classList.remove('route-highlighted');
+        }
+
+        // Restore original style
+        polyline.setStyle({
+            color: originalColor,
+            weight: 4,
+            opacity: 0.85
+        });
+    });
+    routeHighlightedRoads = [];
+
+    // Remove number markers
+    routeMarkers.forEach(marker => {
+        if (mapInstance && mapInstance.hasLayer(marker)) {
+            mapInstance.removeLayer(marker);
+        }
+    });
+    routeMarkers = [];
+
+    // Remove start/end markers
+    if (startMarker && mapInstance && mapInstance.hasLayer(startMarker)) {
+        mapInstance.removeLayer(startMarker);
+        startMarker = null;
+    }
+    if (endMarker && mapInstance && mapInstance.hasLayer(endMarker)) {
+        mapInstance.removeLayer(endMarker);
+        endMarker = null;
+    }
+
+    console.log('[Road] Route highlight cleared');
+}
+
+/**
+ * Check if a route is currently highlighted
+ * @returns {boolean}
+ */
+export function hasRouteHighlight() {
+    return routeHighlightedRoads.length > 0;
+}
+
+/**
+ * Get all roads data for pathfinding
+ * @returns {array} - Array of road objects
+ */
+export function getAllRoadsData() {
+    return Object.values(roads).map(r => r.data);
 }
 
 // ============ Drawing Mode Functions ============

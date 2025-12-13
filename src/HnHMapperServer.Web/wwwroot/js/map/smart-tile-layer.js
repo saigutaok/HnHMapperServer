@@ -6,8 +6,9 @@ import { TileSize, HnHMinZoom, HnHMaxZoom } from './leaflet-config.js';
 // Smart Tile Layer with caching and smooth transitions
 export const SmartTileLayer = L.TileLayer.extend({
     cache: {},              // Per-map cache: { mapId: { tileKey: { etag, state } } }
-    invalidTile: "",
     mapId: 0,
+    offsetX: 0,             // X offset for overlay comparison (in grid coordinates, zoom-independent)
+    offsetY: 0,             // Y offset for overlay comparison (in grid coordinates, zoom-independent)
     mapRevisions: {},       // Map ID → revision number for cache busting
     revisionDebounce: {},   // Map ID → timeout handle for debouncing revision updates
     negativeCache: {},      // Temporary negative cache: cacheKey → expiry timestamp (Date.now() + TTL)
@@ -20,14 +21,31 @@ export const SmartTileLayer = L.TileLayer.extend({
     getTileUrl: function (coords) {
         // Don't request tiles if mapId is invalid (0 or negative)
         if (!this.mapId || this.mapId <= 0) {
-            return this.invalidTile;
+            return '';  // Return empty string to skip tile request
         }
 
+        // Get grid offsets (in grid coordinates, constant across zoom)
+        const gridOffsetX = this.offsetX || 0;
+        const gridOffsetY = this.offsetY || 0;
+
+        // IMPORTANT: coords.x/y are in Leaflet's zoom space, so we must use Leaflet zoom
+        // for offset calculation, not HnH zoom (which is reversed via zoomReverse option)
+        const leafletZoom = this._map ? this._map.getZoom() : HnHMaxZoom;
+        // Scale factor: at Leaflet zoom z, one tile covers 2^(HnHMaxZoom - z) grids
+        const scaleAtLeafletZoom = Math.pow(2, HnHMaxZoom - leafletZoom);
+        // Convert grid offset to tile offset at this Leaflet zoom level
+        const tileOffsetX = gridOffsetX / scaleAtLeafletZoom;
+        const tileOffsetY = gridOffsetY / scaleAtLeafletZoom;
+
+        // Get HnH zoom for the URL z parameter (server needs this for tile path)
+        const hnhZoom = this._getZoomForUrl();
+
+        // Apply tile offset (coords are in Leaflet space, offset now also in Leaflet space)
         const data = {
-            x: coords.x,
-            y: coords.y,
+            x: coords.x + Math.round(tileOffsetX),
+            y: coords.y + Math.round(tileOffsetY),
             map: this.mapId,
-            z: this._getZoomForUrl()
+            z: hnhZoom  // Server needs HnH zoom for tile path
         };
 
         const cacheKey = `${data.map}:${data.x}:${data.y}:${data.z}`;
@@ -47,8 +65,8 @@ export const SmartTileLayer = L.TileLayer.extend({
         if (negativeExpiry) {
             const now = Date.now();
             if (now < negativeExpiry) {
-                // Still within negative cache TTL - return invalid tile placeholder
-                return this.invalidTile;
+                // Still within negative cache TTL - skip tile request
+                return '';
             } else {
                 // Negative cache expired - clear it and retry with nonce
                 delete this.negativeCache[cacheKey];
@@ -111,10 +129,7 @@ export const SmartTileLayer = L.TileLayer.extend({
             const now = Date.now();
             if (now < negativeExpiry) {
                 // Still negative - keep current tile visible instead of blanking it
-                // Only show placeholder if this is a brand new tile with no existing image
-                if (!tile.el.src || tile.el.src === this.invalidTile) {
-                    tile.el.src = this.invalidTile;
-                }
+                // Don't change anything, just return
                 return true;
             } else {
                 // Expired - clear and retry with nonce
@@ -159,7 +174,7 @@ export const SmartTileLayer = L.TileLayer.extend({
                 // Only update if tile element still exists and belongs to same layer
                 if (tile.el && self._tiles[key]) {
                     // Implement crossfade for refreshes (smooth transition from old to new)
-                    if (tileState === 'loaded' && tile.el.src && tile.el.src !== self.invalidTile) {
+                    if (tileState === 'loaded' && tile.el.src) {
                         // Tile is being refreshed - use crossfade transition
                         // Save current opacity
                         const originalOpacity = tile.el.style.opacity || '1';
@@ -345,6 +360,9 @@ export const SmartTileLayer = L.TileLayer.extend({
         tile.addEventListener('error', function() {
             self.tilesLoading = Math.max(0, self.tilesLoading - 1);
             self._updateLoadingOverlay();
+            // Hide the broken image by clearing src and making invisible
+            tile.src = '';
+            tile.style.visibility = 'hidden';
             if (originalDone) originalDone(null, tile);
         });
 
@@ -384,69 +402,3 @@ export const SmartTileLayer = L.TileLayer.extend({
         }
     }
 });
-
-// Helper functions for parent tile placeholders
-export function setParentPlaceholder(layer, e, mapInstance) {
-    try {
-        const img = e?.tile; // underlying <img>
-        const coords = e?.coords;
-        if (!img || !coords || !layer || !mapInstance) return;
-
-        const leafletZ = coords.z;
-        let hnhZ = leafletZ;
-        if (layer.options.zoomReverse) {
-            hnhZ = layer.options.maxZoom - leafletZ;
-        }
-
-        const revision = layer.mapRevisions[layer.mapId] || 1;
-
-        // Try multiple parent levels (parent, grandparent, great-grandparent)
-        // This ensures we always have something to show even if immediate parent is missing
-        for (let levelUp = 1; levelUp <= 3; levelUp++) {
-            const parentZ = hnhZ - levelUp;
-            if (parentZ < HnHMinZoom) break; // no more parents available
-
-            const divisor = Math.pow(2, levelUp);
-            const parentX = Math.floor(coords.x / divisor);
-            const parentY = Math.floor(coords.y / divisor);
-
-            // Calculate which quadrant within the parent tile
-            const localX = coords.x % divisor;
-            const localY = coords.y % divisor;
-
-            // Build parent URL
-            const parentUrl = `/map/grids/${layer.mapId}/${parentZ}/${parentX}_${parentY}.png?v=${revision}`;
-
-            // Check if this parent might exist (not in negative cache)
-            const cacheKey = `${layer.mapId}:${parentX}:${parentY}:${parentZ}`;
-            if (layer.negativeCache[cacheKey]) {
-                continue; // Try next level up
-            }
-
-            // Size background to show the correct portion of parent tile
-            const backgroundSize = (divisor * 100) + '%';
-            const posX = (localX / (divisor - 1)) * 100; // % from left
-            const posY = (localY / (divisor - 1)) * 100; // % from top
-
-            img.style.backgroundImage = `url(${parentUrl})`;
-            img.style.backgroundSize = `${backgroundSize} ${backgroundSize}`;
-            img.style.backgroundPosition = `${posX}% ${posY}%`;
-            img.style.backgroundRepeat = 'no-repeat';
-
-            // Successfully set placeholder, stop trying higher levels
-            break;
-        }
-    } catch { /* ignore */ }
-}
-
-export function clearPlaceholder(e) {
-    try {
-        const img = e?.tile;
-        if (img) {
-            img.style.backgroundImage = '';
-            img.style.backgroundSize = '';
-            img.style.backgroundPosition = '';
-            img.style.backgroundRepeat = '';
-        }
-    } catch { /* ignore */ }
-}

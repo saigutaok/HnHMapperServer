@@ -767,7 +767,7 @@
     }
 
     /// <summary>
-    /// Show a dialog to edit a map (name, hidden, priority).
+    /// Show a dialog to edit a map (name, hidden, priority, default position).
     /// </summary>
     private async Task ShowEditDialog(AdminMapDto map)
     {
@@ -776,7 +776,9 @@
             { "MapId", map.Id },
             { "CurrentName", map.Name },
             { "CurrentHidden", map.Hidden },
-            { "CurrentPriority", map.Priority }
+            { "CurrentPriority", map.Priority },
+            { "CurrentDefaultStartX", map.DefaultStartX },
+            { "CurrentDefaultStartY", map.DefaultStartY }
         };
 
         var options = new DialogOptions

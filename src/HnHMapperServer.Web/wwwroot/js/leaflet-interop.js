@@ -3,13 +3,14 @@
 
 // Import modules
 import { TileSize, HnHMaxZoom, HnHMinZoom, HnHCRS } from './map/leaflet-config.js';
-import { SmartTileLayer, setParentPlaceholder, clearPlaceholder } from './map/smart-tile-layer.js';
+import { SmartTileLayer } from './map/smart-tile-layer.js';
 import * as CharacterManager from './map/character-manager.js';
 import * as MarkerManager from './map/marker-manager.js';
 import * as CustomMarkerManager from './map/custom-marker-manager.js';
 import * as PingManager from './map/ping-manager.js';
 import * as OverlayLayer from './map/overlay-layer.js';
 import * as RoadManager from './map/road-manager.js';
+import * as NavigationManager from './map/navigation-manager.js';
 
 // Grid Coordinate Layer
 L.GridLayer.GridCoord = L.GridLayer.extend({
@@ -159,13 +160,13 @@ export async function initializeMap(mapElementId, dotnetReference) {
         zoomOffset: 0,
         zoomReverse: true,
         tileSize: TileSize,
+        errorTileUrl: '',          // Don't show any image for missing/error tiles
         updateWhenIdle: false,     // Load tiles during zoom animation for smoother transitions (changed from true)
         updateWhenZooming: true,   // Continue updating tiles during zoom animation (NEW)
         keepBuffer: 3,             // Keep 3 tile buffer around viewport for smoother zoom/pan (increased from 2)
         updateInterval: 100,       // Throttle tile updates during continuous pan (ms) - faster for snappier response
         noWrap: true              // Don't wrap tiles at world edges (Haven map is finite)
     });
-    mainLayer.invalidTile = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     mainLayer.mapId = 0; // Explicitly initialize to ensure it's always a number (not undefined)
     mainLayer.addTo(mapInstance);
 
@@ -183,10 +184,6 @@ export async function initializeMap(mapElementId, dotnetReference) {
             }
         } catch { /* ignore */ }
     });
-
-    // Use parent tile as placeholder during load to avoid black background
-    mainLayer.on('tileloadstart', (e) => setParentPlaceholder(mainLayer, e, mapInstance));
-    mainLayer.on('tileload', clearPlaceholder);
 
     // Overlay layer is created lazily when first used (via setOverlayMap with valid mapId > 0)
     // This cuts tile traffic in half by default, as overlay is only needed when comparing maps
@@ -270,6 +267,17 @@ export async function initializeMap(mapElementId, dotnetReference) {
             if (mapInstance.hasLayer(detailedMarkerLayer)) {
                 mapInstance.removeLayer(detailedMarkerLayer);
             }
+        }
+
+        // IMMEDIATE: Update overlay layer - force redraw since tile offset depends on zoom
+        if (overlayLayer && overlayLayer.mapId > 0) {
+            // Clear any CSS transform - offset is handled purely through tile coordinates
+            const container = overlayLayer.getContainer();
+            if (container) {
+                container.style.transform = '';
+            }
+            // Force redraw to recalculate tile offsets at new zoom level
+            overlayLayer.redraw();
         }
 
         // DEBOUNCED: Heavy operations only after zoom settles (1.5s delay)
@@ -588,7 +596,7 @@ export function changeMap(mapId) {
     return true;
 }
 
-export function setOverlayMap(mapId) {
+export function setOverlayMap(mapId, offsetX = 0, offsetY = 0) {
     // Lazy-initialize overlay layer only when actually needed (mapId > 0)
     if (!overlayLayer && mapId > 0) {
         // Create overlay layer on-demand (same config as main layer but with opacity)
@@ -599,14 +607,16 @@ export function setOverlayMap(mapId) {
             zoomReverse: true,
             tileSize: TileSize,
             opacity: 0.6,
+            errorTileUrl: '',          // Don't show any image for missing/error tiles
             updateWhenIdle: false,     // Load tiles during zoom animation for smoother transitions (changed from true)
             updateWhenZooming: true,   // Continue updating tiles during zoom animation (NEW)
             keepBuffer: 3,             // Keep 3 tile buffer around viewport for smoother zoom/pan (increased from 2)
             updateInterval: 100,       // Throttle tile updates during continuous pan (ms) - faster for snappier response
             noWrap: true              // Don't wrap tiles at world edges (Haven map is finite)
         });
-        overlayLayer.invalidTile = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
         overlayLayer.mapId = -1;
+        overlayLayer.offsetX = 0;
+        overlayLayer.offsetY = 0;
 
         // Mark missing overlay tiles as temporarily invalid (TTL-based)
         overlayLayer.on('tileerror', (e) => {
@@ -621,18 +631,43 @@ export function setOverlayMap(mapId) {
                 }
             } catch { /* ignore */ }
         });
-        // Use parent tile as placeholder during load to avoid black background
-        overlayLayer.on('tileloadstart', (e) => setParentPlaceholder(overlayLayer, e, mapInstance));
-        overlayLayer.on('tileload', clearPlaceholder);
 
         overlayLayer.addTo(mapInstance);
     }
 
     if (overlayLayer) {
+        // Ensure we have valid numbers (default to 0)
+        const ox = typeof offsetX === 'number' && !isNaN(offsetX) ? offsetX : 0;
+        const oy = typeof offsetY === 'number' && !isNaN(offsetY) ? offsetY : 0;
+
         overlayLayer.mapId = mapId || -1;
+        overlayLayer.offsetX = ox;
+        overlayLayer.offsetY = oy;
+
+        // Clear negative cache when map/offset changes
+        overlayLayer.negativeCache = {};
         overlayLayer.redraw();
     }
 
+    return true;
+}
+
+// Set overlay offset without changing the map
+// Offset is in grid coordinates (1 grid = 1 tile at max zoom)
+export function setOverlayOffset(offsetX, offsetY) {
+    if (overlayLayer) {
+        // Ensure we have valid numbers (default to 0)
+        const ox = typeof offsetX === 'number' && !isNaN(offsetX) ? offsetX : 0;
+        const oy = typeof offsetY === 'number' && !isNaN(offsetY) ? offsetY : 0;
+
+        // Store the offset values (grid coordinates, zoom-independent)
+        overlayLayer.offsetX = ox;
+        overlayLayer.offsetY = oy;
+
+        // Clear negative cache and redraw
+        overlayLayer.negativeCache = {};
+        overlayLayer.redraw();
+    }
     return true;
 }
 
@@ -969,6 +1004,14 @@ export function jumpToRoad(roadId) {
     return RoadManager.jumpToRoad(roadId, mapInstance);
 }
 
+export function selectRoad(roadId) {
+    return RoadManager.selectRoad(roadId, mapInstance);
+}
+
+export function clearRoadSelection() {
+    return RoadManager.clearRoadSelection();
+}
+
 export function startDrawingRoad() {
     return RoadManager.startDrawingRoad(mapInstance);
 }
@@ -987,4 +1030,65 @@ export function getDrawingPointsCount() {
 
 export function finishDrawingRoadFromMenu() {
     return RoadManager.finishDrawingRoad(mapInstance);
+}
+
+// ============ Navigation Functions ============
+
+export function findRoute(startPoint, endPoint) {
+    const roads = RoadManager.getAllRoadsData();
+    console.log('[Navigation] findRoute called', { startPoint, endPoint, roadsCount: roads.length });
+    if (roads.length === 0) {
+        console.warn('[Navigation] No roads available from getAllRoadsData()');
+        return { roads: [], totalDistance: 0, segments: [], error: 'No roads loaded on current map' };
+    }
+    if (roads.length > 0) {
+        console.log('[Navigation] First road sample:', roads[0]);
+    }
+    const result = NavigationManager.findRoute(startPoint, endPoint, roads);
+    console.log('[Navigation] Result:', result);
+    return result;
+}
+
+export function highlightRoute(roadIds, startPoint, endPoint) {
+    return RoadManager.highlightRoute(roadIds, startPoint, endPoint, mapInstance);
+}
+
+export function clearRouteHighlight() {
+    return RoadManager.clearRouteHighlight(mapInstance);
+}
+
+export function hasRouteHighlight() {
+    return RoadManager.hasRouteHighlight();
+}
+
+// ============ My Character Storage Functions ============
+
+const MY_CHARACTER_KEY = 'havenmap_my_character';
+
+/**
+ * Get the saved "my character" name from localStorage
+ * @returns {string|null} - Character name or null if not set
+ */
+export function getMyCharacter() {
+    return localStorage.getItem(MY_CHARACTER_KEY);
+}
+
+/**
+ * Save the "my character" name to localStorage
+ * @param {string|null} name - Character name to save, or null to clear
+ */
+export function setMyCharacter(name) {
+    if (name) {
+        localStorage.setItem(MY_CHARACTER_KEY, name);
+    } else {
+        localStorage.removeItem(MY_CHARACTER_KEY);
+    }
+}
+
+/**
+ * Set "my character" name for marker highlighting (gold glow + bigger size)
+ * @param {string|null} name - Character name to highlight, or null to clear highlighting
+ */
+export function setMyCharacterForHighlight(name) {
+    CharacterManager.setMyCharacterName(name);
 }

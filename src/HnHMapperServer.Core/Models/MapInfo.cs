@@ -16,5 +16,15 @@ public class MapInfo
     /// </summary>
     public DateTime CreatedAt { get; set; }
 
+    /// <summary>
+    /// Default starting X coordinate when opening this map without URL parameters
+    /// </summary>
+    public int? DefaultStartX { get; set; }
+
+    /// <summary>
+    /// Default starting Y coordinate when opening this map without URL parameters
+    /// </summary>
+    public int? DefaultStartY { get; set; }
+
     public string TenantId { get; set; } = string.Empty;
 }

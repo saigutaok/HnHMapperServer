@@ -45,10 +45,17 @@
                         OnModeChanged="@((mode) => SetMode(mode))"
                         IsFollowing="@isFollowing"
                         FollowingCharacterId="@followingCharacterId"
+                        MyCharacterName="@myCharacterName"
+                        OnSetMyCharacter="@SetMyCharacterAsync"
                         SelectedMap="@selectedMap"
                         OverlayMap="@overlayMap"
                         OnMapSelected="@HandleMapSelectedInternal"
                         OnOverlayMapSelected="@HandleOverlayMapSelectedInternal"
+                        OverlayOffsetX="@MapNavigation.OverlayOffsetX"
+                        OverlayOffsetY="@MapNavigation.OverlayOffsetY"
+                        OnOverlayOffsetXChanged="@HandleOverlayOffsetXChanged"
+                        OnOverlayOffsetYChanged="@HandleOverlayOffsetYChanged"
+                        OnSaveOverlayOffset="@HandleSaveOverlayOffset"
                         OnZoomIn="@HandleZoomIn"
                         OnZoomOut="@HandleZoomOut"
                         OnResetView="@HandleResetView"
@@ -173,6 +180,16 @@
                                      Style="@(showMarkerFilterMode ? "" : "opacity: 0.5;")" />
                         </MudButton>
                     </MudTooltip>
+
+                    <MudTooltip Text="@(string.IsNullOrEmpty(myCharacterName) ? "Set your character first (in Players panel)" : $"Follow {myCharacterName}")" Placement="Placement.Right">
+                        <MudButton OnClick="@FollowMyCharacterAsync"
+                                   Disabled="@string.IsNullOrEmpty(myCharacterName)"
+                                   Variant="Variant.Filled"
+                                   Color="@GetFollowMyCharacterButtonColor()"
+                                   Style="min-width: 40px; min-height: 40px; padding: 8px; border-radius: 50%;">
+                            <MudIcon Icon="@Icons.Material.Filled.PersonPinCircle" />
+                        </MudButton>
+                    </MudTooltip>
                 </div>
 
                 <!-- Go to Ping Button (floating) - positioned at top center of map area, only shown when there are active pings -->
@@ -186,6 +203,17 @@
                                    Size="Size.Large">
                             Jump to Latest Ping
                         </MudButton>
+                    </div>
+                }
+
+                <!-- Navigation Route Panel (floating, bottom-left) - shown when a route is calculated -->
+                @if (currentRoute != null)
+                {
+                    <div style="position: absolute; bottom: 16px; left: 16px; z-index: 1400; max-width: 320px;">
+                        <NavigationPanel IsVisible="true"
+                                        Route="@currentRoute"
+                                        OnClearRoute="@HandleClearRoute"
+                                        OnJumpToRoad="@HandleJumpToRouteRoad" />
                     </div>
                 }
 
@@ -319,6 +347,16 @@
                                 <MudText>Draw Road</MudText>
                             </MudStack>
                         </MudListItem>
+                        @if (allRoads.Count > 0)
+                        {
+                            <MudDivider />
+                            <MudListItem OnClick="@HandleNavigateHereFromMenu" T="string">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                    <MudIcon Icon="@Icons.Material.Filled.Navigation" Size="Size.Small" Color="Color.Info" />
+                                    <MudText>Navigate Here</MudText>
+                                </MudStack>
+                            </MudListItem>
+                        }
                     </MudList>
                 }
             </MudPaper>

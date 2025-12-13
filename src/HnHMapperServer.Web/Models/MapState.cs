@@ -4,6 +4,8 @@ public class MapState
 {
     public int CurrentMapId { get; set; }
     public int? OverlayMapId { get; set; }
+    public double OverlayOffsetX { get; set; }
+    public double OverlayOffsetY { get; set; }
     public int? TrackingCharacterId { get; set; }
 
     // Visibility toggles
