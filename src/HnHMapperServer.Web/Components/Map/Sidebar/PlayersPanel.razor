@@ -21,23 +21,44 @@
     </MudAlert>
 }
 
+@if (!string.IsNullOrEmpty(MyCharacterName))
+{
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+            <MudText Typo="Typo.body2">Your character: @MyCharacterName</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.StarBorder" Size="Size.Small" OnClick="@(() => OnSetMyCharacter.InvokeAsync(null))" Title="Clear selection" />
+        </MudStack>
+    </MudAlert>
+}
+
 @if (FilteredPlayers.Any())
 {
     <MudText Typo="Typo.caption" Class="mb-2">@FilteredPlayers.Count() active player(s)</MudText>
     <MudList T="string" Dense="true" Clickable="true">
         @foreach (var player in FilteredPlayers)
         {
+            var isMyCharacter = player.Name == MyCharacterName;
+            var isFollowed = FollowingCharacterId == player.Id;
             <MudListItem T="string" OnClick="@(() => OnPlayerSelected.InvokeAsync(player))"
-                         Class="@(FollowingCharacterId == player.Id ? "mud-selected-item" : "")">
-                <MudStack Row="false" Spacing="0">
-                    <MudText Typo="Typo.body2">
-                        @player.Name
-                        @if (FollowingCharacterId == player.Id)
-                        {
-                            <MudIcon Icon="@Icons.Material.Filled.MyLocation" Size="Size.Small" Color="Color.Success" Class="ml-1" />
-                        }
-                    </MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">@GetMapName(player.Map)</MudText>
+                         Class="@GetRowClass(isMyCharacter, isFollowed)"
+                         Style="@GetRowStyle(isMyCharacter)">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Style="width: 100%;">
+                    <MudStack Row="false" Spacing="0">
+                        <MudText Typo="Typo.body2">
+                            @player.Name
+                            @if (isFollowed)
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.MyLocation" Size="Size.Small" Color="Color.Success" Class="ml-1" />
+                            }
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@GetMapName(player.Map)</MudText>
+                    </MudStack>
+                    <MudIconButton Icon="@(isMyCharacter ? Icons.Material.Filled.Star : Icons.Material.Outlined.StarBorder)"
+                                   Size="Size.Small"
+                                   Color="@(isMyCharacter ? Color.Warning : Color.Default)"
+                                   OnClick="@(() => HandleSetMyCharacter(player.Name))"
+                                   OnClickStopPropagation="true"
+                                   Title="@(isMyCharacter ? "This is your character" : "Set as your character")" />
                 </MudStack>
             </MudListItem>
         }
@@ -55,37 +76,47 @@ else
     /// List of all active characters/players
     /// </summary>
     [Parameter] public IReadOnlyList<CharacterModel> Characters { get; set; } = Array.Empty<CharacterModel>();
-    
+
     /// <summary>
     /// List of all available maps (for displaying map names)
     /// </summary>
     [Parameter] public IReadOnlyList<MapInfoModel> Maps { get; set; } = Array.Empty<MapInfoModel>();
-    
+
     /// <summary>
     /// Whether follow mode is currently active
     /// </summary>
     [Parameter] public bool IsFollowing { get; set; }
-    
+
     /// <summary>
     /// ID of the character being followed (null if not following)
     /// </summary>
     [Parameter] public int? FollowingCharacterId { get; set; }
-    
+
+    /// <summary>
+    /// Name of the character the user identifies as (persisted in localStorage)
+    /// </summary>
+    [Parameter] public string? MyCharacterName { get; set; }
+
     /// <summary>
     /// Event callback when a player is selected
     /// </summary>
     [Parameter] public EventCallback<CharacterModel> OnPlayerSelected { get; set; }
-    
+
     /// <summary>
     /// Event callback when stop following is requested
     /// </summary>
     [Parameter] public EventCallback OnStopFollowing { get; set; }
-    
+
+    /// <summary>
+    /// Event callback when user sets/clears their character
+    /// </summary>
+    [Parameter] public EventCallback<string?> OnSetMyCharacter { get; set; }
+
     /// <summary>
     /// Filter text for player list
     /// </summary>
     private string playerFilter = "";
-    
+
     /// <summary>
     /// Filtered list of players based on current filter text
     /// </summary>
@@ -94,7 +125,7 @@ else
             .Where(c => string.IsNullOrWhiteSpace(playerFilter) ||
                        c.Name.Contains(playerFilter, StringComparison.OrdinalIgnoreCase))
             .OrderBy(c => c.Name);
-    
+
     /// <summary>
     /// Get map name by ID for display
     /// </summary>
@@ -103,10 +134,38 @@ else
         var map = Maps.FirstOrDefault(m => m.ID == mapId);
         return map?.MapInfo.Name ?? $"Map {mapId}";
     }
+
+    /// <summary>
+    /// Handle setting/clearing "my character"
+    /// </summary>
+    private async Task HandleSetMyCharacter(string playerName)
+    {
+        // If clicking on already-selected character, clear selection
+        if (playerName == MyCharacterName)
+        {
+            await OnSetMyCharacter.InvokeAsync(null);
+        }
+        else
+        {
+            await OnSetMyCharacter.InvokeAsync(playerName);
+        }
+    }
+
+    /// <summary>
+    /// Get CSS class for player row
+    /// </summary>
+    private string GetRowClass(bool isMyCharacter, bool isFollowed)
+    {
+        if (isFollowed) return "mud-selected-item";
+        return "";
+    }
+
+    /// <summary>
+    /// Get inline style for player row (gold tint for my character)
+    /// </summary>
+    private string GetRowStyle(bool isMyCharacter)
+    {
+        if (isMyCharacter) return "background-color: rgba(255, 193, 7, 0.15);";
+        return "";
+    }
 }
-
-
-
-
-
-

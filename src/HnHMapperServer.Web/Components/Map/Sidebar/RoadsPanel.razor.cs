@@ -49,5 +49,31 @@ public partial class RoadsPanel
         return map?.MapInfo.Name ?? $"Map {mapId}";
     }
 
+    // Color palette matching road-manager.js for consistent colors
+    private static readonly string[] RoadColorPalette =
+    [
+        "#FF6B6B",  // Coral red
+        "#4ECDC4",  // Teal
+        "#FFE66D",  // Yellow
+        "#95E1D3",  // Mint
+        "#F38181",  // Salmon
+        "#AA96DA",  // Lavender
+        "#FCBAD3",  // Pink
+        "#A8D8EA",  // Light blue
+        "#FF9F43",  // Orange
+        "#5CD85A",  // Green
+        "#DDA0DD",  // Plum
+        "#87CEEB",  // Sky blue
+        "#F0E68C",  // Khaki
+        "#98D8C8",  // Seafoam
+        "#C9B1FF",  // Periwinkle
+        "#FFB6C1"   // Light pink
+    ];
+
+    private static string GetRoadColor(int roadId)
+    {
+        return RoadColorPalette[roadId % RoadColorPalette.Length];
+    }
+
     #endregion
 }

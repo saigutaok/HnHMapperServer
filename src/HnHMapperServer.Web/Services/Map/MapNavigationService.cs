@@ -50,6 +50,16 @@ public class MapNavigationService
     private int? _overlayMapId = null;
 
     /// <summary>
+    /// Overlay X offset for map comparison
+    /// </summary>
+    private double _overlayOffsetX = 0;
+
+    /// <summary>
+    /// Overlay Y offset for map comparison
+    /// </summary>
+    private double _overlayOffsetY = 0;
+
+    /// <summary>
     /// Per-map revision numbers received via SSE (used for cache busting and UI version indicator)
     /// </summary>
     private readonly Dictionary<int, int> _mapRevisions = new();
@@ -127,6 +137,24 @@ public class MapNavigationService
     {
         get => _overlayMapId;
         set => _overlayMapId = value;
+    }
+
+    /// <summary>
+    /// Overlay X offset for map comparison
+    /// </summary>
+    public double OverlayOffsetX
+    {
+        get => _overlayOffsetX;
+        set => _overlayOffsetX = value;
+    }
+
+    /// <summary>
+    /// Overlay Y offset for map comparison
+    /// </summary>
+    public double OverlayOffsetY
+    {
+        get => _overlayOffsetY;
+        set => _overlayOffsetY = value;
     }
 
     /// <summary>
@@ -244,13 +272,30 @@ public class MapNavigationService
     }
 
     /// <summary>
-    /// Change overlay map
+    /// Change overlay map. Does not reset offset - caller should load saved offset from API.
     /// </summary>
     public void ChangeOverlayMap(int? mapId)
     {
         _overlayMapId = mapId;
         _overlayMap = mapId.HasValue ? GetMapById(mapId.Value) : null;
+        // Don't reset offset - Map.razor.cs loads saved offset from API
+        // If clearing overlay (mapId=null), reset offset to 0
+        if (!mapId.HasValue)
+        {
+            _overlayOffsetX = 0;
+            _overlayOffsetY = 0;
+        }
         _logger.LogInformation("Overlay map changed to {MapId}", mapId?.ToString() ?? "None");
+    }
+
+    /// <summary>
+    /// Set overlay offset for map comparison
+    /// </summary>
+    public void SetOverlayOffset(double offsetX, double offsetY)
+    {
+        _overlayOffsetX = offsetX;
+        _overlayOffsetY = offsetY;
+        _logger.LogDebug("Overlay offset set to ({OffsetX}, {OffsetY})", offsetX, offsetY);
     }
 
     /// <summary>

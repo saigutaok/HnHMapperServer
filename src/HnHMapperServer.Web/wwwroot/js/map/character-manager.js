@@ -8,6 +8,7 @@ const characters = {};
 let currentMapId = 0;
 let updateIntervalMs = 2000;
 let showTooltips = true; // Track tooltip visibility state
+let myCharacterName = null; // Name of "my character" for highlighting
 
 /**
  * Set the current map ID for character filtering
@@ -24,6 +25,61 @@ export function setUpdateInterval(intervalMs) {
 }
 
 /**
+ * Set "my character" name for highlighting (gold glow + bigger size)
+ * @param {string|null} name - Character name to highlight, or null to clear
+ */
+export function setMyCharacterName(name) {
+    const previousName = myCharacterName;
+    myCharacterName = name;
+
+    console.log('[Characters] setMyCharacterName:', name);
+
+    // If the name changed, refresh affected character markers
+    if (previousName !== name) {
+        // Refresh the previous "my character" to remove highlighting
+        if (previousName) {
+            const prevChar = Object.values(characters).find(c => c.data?.name === previousName);
+            if (prevChar) {
+                refreshCharacterMarker(prevChar);
+            }
+        }
+        // Refresh the new "my character" to add highlighting
+        if (name) {
+            const newChar = Object.values(characters).find(c => c.data?.name === name);
+            if (newChar) {
+                refreshCharacterMarker(newChar);
+            }
+        }
+    }
+}
+
+/**
+ * Refresh a single character's marker to update styling
+ */
+function refreshCharacterMarker(char) {
+    if (!char || !char.marker || !char.data) return;
+
+    const isMyCharacter = char.data.name === myCharacterName;
+    const baseSize = 32;
+    const iconSize = isMyCharacter ? Math.round(baseSize * 1.33) : baseSize; // 43px for my character
+    const iconAnchor = Math.round(iconSize / 2);
+
+    const iconUrl = getCharacterIcon(char.data.type);
+    const icon = L.icon({
+        iconUrl: iconUrl,
+        iconSize: [iconSize, iconSize],
+        iconAnchor: [iconAnchor, iconAnchor],
+        className: isMyCharacter ? 'my-character-icon' : ''
+    });
+
+    char.marker.setIcon(icon);
+
+    // Update tooltip color
+    const color = isMyCharacter ? '#FFD700' : getCharacterColor(char.data.type);
+    char.marker.setTooltipContent(`<div style='color:${color};'><b>${char.data.name}</b></div>`);
+}
+
+/**
  * Add a character marker to the map
  * @param {object} characterData - Character data with id, name, map, position: {x, y}, type, rotation, speed
  * @param {object} mapInstance - Leaflet map instance
@@ -34,11 +90,18 @@ export function addCharacter(characterData, mapInstance) {
         return false;
     }
 
+    // Check if this is "my character" for special highlighting
+    const isMyCharacter = characterData.name === myCharacterName;
+    const baseSize = 32;
+    const iconSize = isMyCharacter ? Math.round(baseSize * 1.33) : baseSize; // 43px for my character
+    const iconAnchor = Math.round(iconSize / 2);
+
     const iconUrl = getCharacterIcon(characterData.type);
     const icon = L.icon({
         iconUrl: iconUrl,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16]
+        iconSize: [iconSize, iconSize],
+        iconAnchor: [iconAnchor, iconAnchor],
+        className: isMyCharacter ? 'my-character-icon' : ''
     });
 
     const position = mapInstance.unproject([characterData.position.x, characterData.position.y], HnHMaxZoom);
@@ -46,10 +109,11 @@ export function addCharacter(characterData, mapInstance) {
         icon: icon,
         riseOnHover: true,
         rotationAngle: characterData.rotation,
-        zIndexOffset: 5000  // Always render above other markers (pings use 10000)
+        zIndexOffset: isMyCharacter ? 6000 : 5000  // My character renders above other characters
     });
 
-    const color = getCharacterColor(characterData.type);
+    // Gold tooltip for my character, otherwise use type-based color
+    const color = isMyCharacter ? '#FFD700' : getCharacterColor(characterData.type);
     marker.bindTooltip(`<div style='color:${color};'><b>${characterData.name}</b></div>`, {
         permanent: true,
         direction: 'top',
@@ -101,14 +165,21 @@ export function updateCharacter(characterId, characterData, mapInstance) {
         return false;
     }
 
+    // Check if this is "my character" for special highlighting
+    const isMyCharacter = characterData.name === myCharacterName;
+    const baseSize = 32;
+    const iconSize = isMyCharacter ? Math.round(baseSize * 1.33) : baseSize; // 43px for my character
+    const iconAnchor = Math.round(iconSize / 2);
+
     const marker = char.marker;
     const iconUrl = getCharacterIcon(characterData.type);
-    const color = getCharacterColor(characterData.type);
+    const color = isMyCharacter ? '#FFD700' : getCharacterColor(characterData.type);
 
     marker.setIcon(L.icon({
         iconUrl: iconUrl,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16]
+        iconSize: [iconSize, iconSize],
+        iconAnchor: [iconAnchor, iconAnchor],
+        className: isMyCharacter ? 'my-character-icon' : ''
     }));
 
     marker.setTooltipContent(`<div style='color:${color};'><b>${characterData.name}</b></div>`);

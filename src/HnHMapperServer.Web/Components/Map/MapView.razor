@@ -110,12 +110,23 @@
         await SafeJs.InvokeVoidSafeAsync(jsModule, "changeMap", mapId);
     }
 
-    public async Task SetOverlayMapAsync(int? mapId)
+    public async Task SetOverlayMapAsync(int? mapId, double offsetX = 0, double offsetY = 0)
     {
         if (!initialized || jsModule == null || disposed) return;
 
         State.OverlayMapId = mapId;
-        await SafeJs.InvokeVoidSafeAsync(jsModule, "setOverlayMap", mapId);
+        State.OverlayOffsetX = offsetX;
+        State.OverlayOffsetY = offsetY;
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "setOverlayMap", mapId, offsetX, offsetY);
+    }
+
+    public async Task SetOverlayOffsetAsync(double offsetX, double offsetY)
+    {
+        if (!initialized || jsModule == null || disposed) return;
+
+        State.OverlayOffsetX = offsetX;
+        State.OverlayOffsetY = offsetY;
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "setOverlayOffset", offsetX, offsetY);
     }
 
     public async Task SetViewAsync(int gridX, int gridY, int zoom)

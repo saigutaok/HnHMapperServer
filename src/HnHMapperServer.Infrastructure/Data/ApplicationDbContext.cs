@@ -67,6 +67,9 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
     // Overlay data tables
     public DbSet<OverlayDataEntity> OverlayData => Set<OverlayDataEntity>();
 
+    // Overlay offset storage (for map comparison feature)
+    public DbSet<OverlayOffsetEntity> OverlayOffsets => Set<OverlayOffsetEntity>();
+
     // Performance optimization tables
     public DbSet<DirtyZoomTileEntity> DirtyZoomTiles => Set<DirtyZoomTileEntity>();
 
@@ -661,6 +664,27 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<OverlayOffsetEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TenantId).IsRequired();
+            entity.Property(e => e.CurrentMapId).IsRequired();
+            entity.Property(e => e.OverlayMapId).IsRequired();
+            entity.Property(e => e.OffsetX).IsRequired();
+            entity.Property(e => e.OffsetY).IsRequired();
+            entity.Property(e => e.UpdatedAt).IsRequired();
+
+            // Unique index: only one offset per map pair per tenant
+            entity.HasIndex(e => new { e.TenantId, e.CurrentMapId, e.OverlayMapId }).IsUnique();
+            entity.HasIndex(e => e.TenantId);
+
+            // Foreign key to Tenants
+            entity.HasOne<TenantEntity>()
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<DirtyZoomTileEntity>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -735,6 +759,9 @@ public sealed class ApplicationDbContext : IdentityDbContext<IdentityUser, Ident
             .HasQueryFilter(t => t.TenantId == GetCurrentTenantId());
 
         modelBuilder.Entity<OverlayDataEntity>()
+            .HasQueryFilter(o => o.TenantId == GetCurrentTenantId());
+
+        modelBuilder.Entity<OverlayOffsetEntity>()
             .HasQueryFilter(o => o.TenantId == GetCurrentTenantId());
     }
 }
@@ -1369,6 +1396,48 @@ public sealed class OverlayDataEntity
 
     /// <summary>
     /// UTC timestamp when the overlay data was last updated
+    /// </summary>
+    public DateTime UpdatedAt { get; set; }
+}
+
+/// <summary>
+/// Stores overlay offset mappings for map comparison feature.
+/// One entry per (CurrentMapId, OverlayMapId) pair per tenant.
+/// </summary>
+public sealed class OverlayOffsetEntity
+{
+    /// <summary>
+    /// Primary key
+    /// </summary>
+    public int Id { get; set; }
+
+    /// <summary>
+    /// Tenant ID for multi-tenancy isolation
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The base map ID (the main map being viewed)
+    /// </summary>
+    public int CurrentMapId { get; set; }
+
+    /// <summary>
+    /// The overlay map ID (the map being overlaid on top)
+    /// </summary>
+    public int OverlayMapId { get; set; }
+
+    /// <summary>
+    /// Horizontal offset in grid coordinates
+    /// </summary>
+    public double OffsetX { get; set; }
+
+    /// <summary>
+    /// Vertical offset in grid coordinates
+    /// </summary>
+    public double OffsetY { get; set; }
+
+    /// <summary>
+    /// UTC timestamp when this offset was last updated
     /// </summary>
     public DateTime UpdatedAt { get; set; }
 }
