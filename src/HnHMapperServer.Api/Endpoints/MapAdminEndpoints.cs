@@ -30,6 +30,9 @@ public static class MapAdminEndpoints
 
         // DELETE /admin/maps/{mapId} - Delete a map
         group.MapDelete("{mapId}", DeleteMap);
+
+        // PUT /admin/maps/{mapId}/default-position - Update map default starting position
+        group.MapPut("{mapId}/default-position", UpdateDefaultPosition);
     }
 
     /// <summary>
@@ -79,7 +82,9 @@ public static class MapAdminEndpoints
                 Id = m.Id,
                 Name = m.Name,
                 Hidden = m.Hidden,
-                Priority = m.Priority
+                Priority = m.Priority,
+                DefaultStartX = m.DefaultStartX,
+                DefaultStartY = m.DefaultStartY
             })
             .ToListAsync();
 
@@ -289,4 +294,55 @@ public static class MapAdminEndpoints
     {
         public required string Message { get; init; }
     }
+
+    /// <summary>
+    /// PUT /admin/maps/{mapId}/default-position
+    /// Updates the default starting position for a map.
+    /// </summary>
+    private static async Task<IResult> UpdateDefaultPosition(
+        int mapId,
+        UpdateDefaultPositionRequest request,
+        IMapRepository mapRepository,
+        IAuditService auditService,
+        ITenantContextAccessor tenantContext,
+        HttpContext context)
+    {
+        var tenantId = tenantContext.GetCurrentTenantId();
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            return Results.Unauthorized();
+        }
+
+        // Get existing map (automatically tenant-scoped)
+        var map = await mapRepository.GetMapAsync(mapId);
+        if (map == null)
+        {
+            return Results.NotFound(new { error = $"Map {mapId} not found" });
+        }
+
+        var oldX = map.DefaultStartX;
+        var oldY = map.DefaultStartY;
+
+        map.DefaultStartX = request.X;
+        map.DefaultStartY = request.Y;
+
+        // Save changes
+        await mapRepository.SaveMapAsync(map);
+
+        // Audit log
+        var userId = context.User.FindFirst("sub")?.Value ?? context.User.Identity?.Name ?? "unknown";
+        await auditService.LogAsync(new AuditEntry
+        {
+            TenantId = tenantId,
+            Action = "MapDefaultPositionUpdated",
+            EntityType = "Map",
+            EntityId = mapId.ToString(),
+            OldValue = $"DefaultStartX: {oldX}, DefaultStartY: {oldY}",
+            NewValue = $"DefaultStartX: {request.X}, DefaultStartY: {request.Y}"
+        });
+
+        return Results.Ok(new { message = "Map default position updated" });
+    }
+
+    private record UpdateDefaultPositionRequest(int? X, int? Y);
 }

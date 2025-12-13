@@ -300,7 +300,9 @@ public static class MapEndpoints
                     Hidden = m.Hidden,
                     Priority = m.Priority,
                     Revision = revisionCache.Get(m.Id),  // Include current revision for initial cache setup
-                    IsMainMap = config.MainMapId.HasValue && config.MainMapId.Value == m.Id
+                    IsMainMap = config.MainMapId.HasValue && config.MainMapId.Value == m.Id,
+                    DefaultStartX = m.DefaultStartX,
+                    DefaultStartY = m.DefaultStartY
                 },
                 Size = 0  // Size not used in frontend, set to 0
             })

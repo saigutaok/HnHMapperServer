@@ -417,14 +417,16 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         }
         else if (MapNavigation.Maps.Count > 0)
         {
-            var firstMapId = MapNavigation.Maps[0].ID;
-            Logger.LogInformation("No URL params, using default position (0, 0, 7) on map {MapId}", firstMapId);
-            MapNavigation.ChangeMap(firstMapId);
-            state.CurrentMapId = firstMapId;
-            await mapView.ChangeMapAsync(firstMapId);
-            await mapView.SetViewAsync(0, 0, 7);
+            var firstMap = MapNavigation.Maps[0];
+            var startX = firstMap.MapInfo.DefaultStartX ?? 0;
+            var startY = firstMap.MapInfo.DefaultStartY ?? 0;
+            Logger.LogInformation("No URL params, using default position ({X}, {Y}, 7) on map {MapId}", startX, startY, firstMap.ID);
+            MapNavigation.ChangeMap(firstMap.ID);
+            state.CurrentMapId = firstMap.ID;
+            await mapView.ChangeMapAsync(firstMap.ID);
+            await mapView.SetViewAsync(startX, startY, 7);
             // Synchronize MapNavigationService state to prevent position resets
-            MapNavigation.UpdatePosition(0, 0, 7);
+            MapNavigation.UpdatePosition(startX, startY, 7);
         }
         else
         {
@@ -938,10 +940,15 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     {
         if (mapView != null && MapNavigation.Maps.Count > 0)
         {
+            // Find the current map to get its default starting position
+            var currentMap = MapNavigation.Maps.FirstOrDefault(m => m.ID == MapNavigation.CurrentMapId);
+            var startX = currentMap?.MapInfo.DefaultStartX ?? 0;
+            var startY = currentMap?.MapInfo.DefaultStartY ?? 0;
+
             await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
-            await mapView.SetViewAsync(0, 0, 7);
-            MapNavigation.UpdatePosition(0, 0, 7);
-            Navigation.NavigateTo(MapNavigation.GetUrl(MapNavigation.CurrentMapId, 0, 0, 7), false);
+            await mapView.SetViewAsync(startX, startY, 7);
+            MapNavigation.UpdatePosition(startX, startY, 7);
+            Navigation.NavigateTo(MapNavigation.GetUrl(MapNavigation.CurrentMapId, startX, startY, 7), false);
         }
     }
 
@@ -955,10 +962,12 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
             await RebuildMarkersForCurrentMap();
 
-            var cx = (int)MapNavigation.CenterX;
-            var cy = (int)MapNavigation.CenterY;
-            await mapView.SetViewAsync(cx, cy, MapNavigation.Zoom);
-            Navigation.NavigateTo(MapNavigation.GetUrl(map.ID, cx, cy, MapNavigation.Zoom), false);
+            // Use the map's default starting position, or (0, 0) if not set
+            var startX = map.MapInfo.DefaultStartX ?? 0;
+            var startY = map.MapInfo.DefaultStartY ?? 0;
+            await mapView.SetViewAsync(startX, startY, 7);
+            MapNavigation.UpdatePosition(startX, startY, 7);
+            Navigation.NavigateTo(MapNavigation.GetUrl(map.ID, startX, startY, 7), false);
 
             CustomMarkerState.MarkAsNeedingRender();
             await TryRenderPendingCustomMarkersAsync();

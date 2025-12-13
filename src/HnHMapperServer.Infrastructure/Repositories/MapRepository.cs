@@ -135,7 +135,9 @@ public class MapRepository : IMapRepository
         Name = entity.Name,
         Hidden = entity.Hidden,
         Priority = entity.Priority,
-        CreatedAt = entity.CreatedAt
+        CreatedAt = entity.CreatedAt,
+        DefaultStartX = entity.DefaultStartX,
+        DefaultStartY = entity.DefaultStartY
     };
 
     private MapInfoEntity MapFromDomain(MapInfo domain) => new MapInfoEntity
@@ -145,6 +147,8 @@ public class MapRepository : IMapRepository
         Hidden = domain.Hidden,
         Priority = domain.Priority,
         CreatedAt = domain.CreatedAt,
+        DefaultStartX = domain.DefaultStartX,
+        DefaultStartY = domain.DefaultStartY,
         TenantId = _tenantContext.GetRequiredTenantId()
     };
 }

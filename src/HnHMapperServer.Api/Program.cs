@@ -185,7 +185,7 @@ builder.Services.AddSingleton<IIconCatalogService>(sp =>
 // Register background services
 builder.Services.AddHostedService<CharacterCleanupService>();
 builder.Services.AddHostedService<MarkerReadinessService>();
-builder.Services.AddHostedService<MapCleanupService>();
+//builder.Services.AddHostedService<MapCleanupService>();
 builder.Services.AddHostedService<InvitationExpirationService>();
 builder.Services.AddHostedService<TenantStorageVerificationService>(); // Phase 4: Storage quota verification
 builder.Services.AddHostedService<PingCleanupService>(); // Ping cleanup service
