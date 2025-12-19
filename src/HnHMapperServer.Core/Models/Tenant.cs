@@ -44,4 +44,9 @@ public sealed class TenantEntity
     /// Whether Discord notifications are enabled for this tenant
     /// </summary>
     public bool DiscordNotificationsEnabled { get; set; } = false;
+
+    /// <summary>
+    /// UTC timestamp of the last tenant activity (grid uploads, position updates)
+    /// </summary>
+    public DateTime? LastActivityAt { get; set; }
 }

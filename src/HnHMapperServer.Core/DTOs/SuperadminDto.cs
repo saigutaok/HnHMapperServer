@@ -13,6 +13,7 @@ public class TenantListDto
     public bool IsActive { get; set; }
     public int UserCount { get; set; }
     public int TokenCount { get; set; }
+    public DateTime? LastActivityAt { get; set; }
 }
 
 /// <summary>

@@ -89,10 +89,16 @@ public static partial class ClientEndpoints
         IConfiguration configuration,
         HnHMapperServer.Api.Services.MapRevisionCache revisionCache,
         IUpdateNotificationService updateNotificationService,
+        ITenantActivityService activityService,
         ILogger<Program> logger)
     {
         if (!await ClientTokenHelpers.HasUploadAsync(context, db, tokenService, token, logger))
             return Results.Unauthorized();
+
+        // Record tenant activity
+        var tenantId = context.Items["TenantId"] as string;
+        if (!string.IsNullOrEmpty(tenantId))
+            activityService.RecordActivity(tenantId);
 
         // Read raw JSON and deserialize with case-insensitive options (Go client sends lowercase)
         var gridUpdate = await context.Request.ReadFromJsonAsync<GridUpdateDto>(new JsonSerializerOptions
@@ -127,6 +133,7 @@ public static partial class ClientEndpoints
         IUpdateNotificationService updateNotificationService,
         IStorageQuotaService quotaService,
         ITenantFilePathService filePathService,
+        ITenantActivityService activityService,
         ILogger<Program> logger)
     {
         if (!await ClientTokenHelpers.HasUploadAsync(context, db, tokenService, token, logger))
@@ -139,6 +146,9 @@ public static partial class ClientEndpoints
             logger.LogError("GridUpload: TenantId not found in context");
             return Results.Unauthorized();
         }
+
+        // Record tenant activity
+        activityService.RecordActivity(tenantId);
 
         var request = context.Request;
 
@@ -454,10 +464,16 @@ public static partial class ClientEndpoints
         ITokenService tokenService,
         IGridRepository gridRepository,
         ICharacterService characterService,
+        ITenantActivityService activityService,
         ILogger<Program> logger)
     {
         if (!await ClientTokenHelpers.HasUploadAsync(context, db, tokenService, token, logger))
             return Results.Unauthorized();
+
+        // Record tenant activity
+        var tenantId = context.Items["TenantId"] as string;
+        if (!string.IsNullOrEmpty(tenantId))
+            activityService.RecordActivity(tenantId);
 
         // Read raw JSON with case-insensitive options (Go client sends lowercase: coords, gridID, name, etc.)
         var positions = await context.Request.ReadFromJsonAsync<Dictionary<string, Dictionary<string, object>>>(new JsonSerializerOptions
@@ -549,8 +565,8 @@ public static partial class ClientEndpoints
                 continue;
             }
 
-            // Extract tenant ID from context (set by TenantContextMiddleware via token validation)
-            var tenantId = context.Items["TenantId"] as string ?? string.Empty;
+            // Use tenant ID from context (set by TenantContextMiddleware via token validation)
+            var characterTenantId = context.Items["TenantId"] as string ?? string.Empty;
 
             var character = new Character
             {
@@ -564,7 +580,7 @@ public static partial class ClientEndpoints
                 Rotation = rotation,
                 Speed = speed,
                 Updated = DateTime.UtcNow,
-                TenantId = tenantId
+                TenantId = characterTenantId
             };
 
             characterService.UpdateCharacter(id, character);

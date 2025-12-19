@@ -5,6 +5,7 @@ using HnHMapperServer.Infrastructure.Data;
 using HnHMapperServer.Infrastructure.Repositories;
 using HnHMapperServer.Services.Interfaces;
 using HnHMapperServer.Services.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -33,20 +34,28 @@ public class GridServiceMapMergeTests : IDisposable
     private readonly ITileRepository _tileRepository;
     private readonly IConfigRepository _configRepository;
 
+    private const string TestTenantId = "default-tenant-1";
+
     public GridServiceMapMergeTests()
     {
+        // Create mock HttpContextAccessor to set tenant ID for EF Core query filters
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items["TenantId"] = TestTenantId;
+        var mockHttpContextAccessor = new Mock<IHttpContextAccessor>();
+        mockHttpContextAccessor.Setup(x => x.HttpContext).Returns(httpContext);
+
         // Create in-memory database for testing
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
 
-        _dbContext = new ApplicationDbContext(options);
+        _dbContext = new ApplicationDbContext(options, mockHttpContextAccessor.Object);
 
         // Seed default tenant for multi-tenancy support
         _dbContext.Tenants.Add(new HnHMapperServer.Core.Models.TenantEntity
         {
-            Id = "default-tenant-1",
-            Name = "default-tenant-1",
+            Id = TestTenantId,
+            Name = TestTenantId,
             StorageQuotaMB = 1024,
             CurrentStorageMB = 0,
             CreatedAt = DateTime.UtcNow,
@@ -61,8 +70,8 @@ public class GridServiceMapMergeTests : IDisposable
 
         // Mock tenant context accessor
         var mockTenantContext = new Mock<ITenantContextAccessor>();
-        mockTenantContext.Setup(x => x.GetCurrentTenantId()).Returns("default-tenant-1");
-        mockTenantContext.Setup(x => x.GetRequiredTenantId()).Returns("default-tenant-1");
+        mockTenantContext.Setup(x => x.GetCurrentTenantId()).Returns(TestTenantId);
+        mockTenantContext.Setup(x => x.GetRequiredTenantId()).Returns(TestTenantId);
 
         // Initialize repositories
         _gridRepository = new GridRepository(_dbContext, mockTenantContext.Object);
@@ -76,6 +85,9 @@ public class GridServiceMapMergeTests : IDisposable
         var mockNotificationService = new Mock<IUpdateNotificationService>();
         var mockQuotaService = new Mock<IStorageQuotaService>();
         var mockMapNameService = new Mock<IMapNameService>();
+        mockMapNameService.Setup(x => x.GenerateUniqueIdentifierAsync(It.IsAny<string>()))
+            .ReturnsAsync(() => $"test-map-{Guid.NewGuid():N}");
+        var mockPendingMarkerService = new Mock<IPendingMarkerService>();
 
         _tileService = new TileService(
             _tileRepository,
@@ -92,6 +104,7 @@ public class GridServiceMapMergeTests : IDisposable
             _configRepository,
             mockNotificationService.Object,
             mockMapNameService.Object,
+            mockPendingMarkerService.Object,
             mockTenantContext.Object,
             gridLogger.Object);
 
@@ -126,70 +139,89 @@ public class GridServiceMapMergeTests : IDisposable
     public async Task MergeMapsAsync_CorrectlyLookupsSourceTiles_AndRegeneratesZooms()
     {
         // Arrange: Create two separate maps with known grids and tiles
-        
-        // Map 1: Contains grids at (0,0) and (1,0)
+        // Map 1: Contains grid at (0,0) - will be the TARGET map (lower ID)
         var map1 = new MapInfo { Id = 1, Name = "Map1", Hidden = false, Priority = 0 };
         await _mapRepository.SaveMapAsync(map1);
 
         var grid1a = new GridData { Id = "grid1a", Map = 1, Coord = new Coord(0, 0), NextUpdate = DateTime.UtcNow.AddMinutes(-1) };
-        var grid1b = new GridData { Id = "grid1b", Map = 1, Coord = new Coord(1, 0), NextUpdate = DateTime.UtcNow.AddMinutes(-1) };
         await _gridRepository.SaveGridAsync(grid1a);
-        await _gridRepository.SaveGridAsync(grid1b);
 
-        // Create test tiles for map 1 (red color)
+        // Create test tile for map 1 (red color)
         var tile1aPath = await CreateTestTileAsync("grid1a", 255, 0, 0);
-        var tile1bPath = await CreateTestTileAsync("grid1b", 255, 0, 0);
-        await _tileService.SaveTileAsync(1, new Coord(0, 0), 0, tile1aPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "default-tenant-1", 0);
-        await _tileService.SaveTileAsync(1, new Coord(1, 0), 0, tile1bPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "default-tenant-1", 0);
+        await _tileService.SaveTileAsync(1, new Coord(0, 0), 0, tile1aPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), TestTenantId, 0);
 
-        // Map 2: Contains grids at (5,5) and (6,5)
+        // Map 2: Contains grids at (100,100) and (101,100) - will be MERGED into map 1
+        // Using high coordinates to ensure no overlap after shift
         var map2 = new MapInfo { Id = 2, Name = "Map2", Hidden = false, Priority = 0 };
         await _mapRepository.SaveMapAsync(map2);
 
-        var grid2a = new GridData { Id = "grid2a", Map = 2, Coord = new Coord(5, 5), NextUpdate = DateTime.UtcNow.AddMinutes(-1) };
-        var grid2b = new GridData { Id = "grid2b", Map = 2, Coord = new Coord(6, 5), NextUpdate = DateTime.UtcNow.AddMinutes(-1) };
+        var grid2a = new GridData { Id = "grid2a", Map = 2, Coord = new Coord(100, 100), NextUpdate = DateTime.UtcNow.AddMinutes(-1) };
+        var grid2b = new GridData { Id = "grid2b", Map = 2, Coord = new Coord(101, 100), NextUpdate = DateTime.UtcNow.AddMinutes(-1) };
         await _gridRepository.SaveGridAsync(grid2a);
         await _gridRepository.SaveGridAsync(grid2b);
 
         // Create test tiles for map 2 (green color)
         var tile2aPath = await CreateTestTileAsync("grid2a", 0, 255, 0);
         var tile2bPath = await CreateTestTileAsync("grid2b", 0, 255, 0);
-        await _tileService.SaveTileAsync(2, new Coord(5, 5), 0, tile2aPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "default-tenant-1", 0);
-        await _tileService.SaveTileAsync(2, new Coord(6, 5), 0, tile2bPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "default-tenant-1", 0);
+        await _tileService.SaveTileAsync(2, new Coord(100, 100), 0, tile2aPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), TestTenantId, 0);
+        await _tileService.SaveTileAsync(2, new Coord(101, 100), 0, tile2bPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), TestTenantId, 0);
 
-        // Act: Send gridUpdate that spans both maps (this should trigger merge)
-        // Simulate a 3x3 grid update where:
-        // - Center grid (1,1) is from map 1 at coord (0,0)
-        // - Another grid (2,1) is from map 2 at coord (5,5)
-        // This creates a situation where maps need to merge
+        // Act: Send gridUpdate that spans BOTH maps (this will trigger merge)
+        // In the grid update layout:
+        // - grid1a is at position (row=1, col=1) -> x=1, y=1
+        //   grid1a actual coord (0,0), offset = (0-1, 0-1) = (-1, -1)
+        // - grid2a is at position (row=2, col=1) -> x=2, y=1
+        //   grid2a actual coord (100,100), offset = (100-2, 100-1) = (98, 99)
+        // Map 1 (lower ID) is target. Shift = targetOffset - sourceOffset = (-1,-1) - (98,99) = (-99, -100)
+        // grid2a moves to (100 + -99, 100 + -100) = (1, 0)
+        // grid2b moves to (101 + -99, 100 + -100) = (2, 0)
         var gridUpdate = new GridUpdateDto
         {
             Grids = new List<List<string>>
             {
                 new List<string> { "new1", "new2", "new3" },       // Row 0
-                new List<string> { "grid1a", "grid1b", "new6" },   // Row 1 (contains map 1 grids)
-                new List<string> { "new7", "new8", "new9" }        // Row 2
+                new List<string> { "new4", "grid1a", "new6" },     // Row 1: map 1 grid at (1,1)
+                new List<string> { "new7", "grid2a", "grid2b" }    // Row 2: map 2 grids at (2,1) and (2,2) - triggers merge!
             }
         };
 
         var result = await _gridService.ProcessGridUpdateAsync(gridUpdate, _testGridStorage);
 
         // Assert: Verify that tiles were correctly copied and zooms generated
-        
+
         // 1. Verify that map 1 still exists (it's the target map)
         var map1After = await _mapRepository.GetMapAsync(1);
         Assert.NotNull(map1After);
 
-        // 2. Verify that base tiles (zoom 0) exist for the original grids
-        var baseTile1a = await _tileService.GetTileAsync(1, new Coord(0, 0), 0);
-        var baseTile1b = await _tileService.GetTileAsync(1, new Coord(1, 0), 0);
-        Assert.NotNull(baseTile1a);
-        Assert.NotNull(baseTile1b);
-        Assert.Equal(tile1aPath, baseTile1a.File);
-        Assert.Equal(tile1bPath, baseTile1b.File);
+        // 2. Verify that map 2 was deleted (merged into map 1)
+        var map2After = await _mapRepository.GetMapAsync(2);
+        Assert.Null(map2After);
 
-        // 3. Verify that zoom level 1 was generated (parent of 0,0 and 1,0 is 0,0 at zoom 1)
-        var zoom1Tile = await _tileService.GetTileAsync(1, new Coord(0, 0), 1);
+        // 3. Verify that base tile (zoom 0) exists for the original map 1 grid
+        var baseTile1a = await _tileService.GetTileAsync(1, new Coord(0, 0), 0);
+        Assert.NotNull(baseTile1a);
+        Assert.Equal(tile1aPath, baseTile1a.File);
+
+        // 4. Verify that map 2 grids were moved to map 1 with shifted coordinates
+        var movedGrid2a = await _gridRepository.GetGridAsync("grid2a");
+        var movedGrid2b = await _gridRepository.GetGridAsync("grid2b");
+        Assert.NotNull(movedGrid2a);
+        Assert.NotNull(movedGrid2b);
+        Assert.Equal(1, movedGrid2a.Map); // Should now be in map 1
+        Assert.Equal(1, movedGrid2b.Map); // Should now be in map 1
+
+        // 5. Verify that tiles from map 2 were copied to map 1 at new coordinates
+        var movedTile2a = await _tileService.GetTileAsync(1, movedGrid2a.Coord, 0);
+        var movedTile2b = await _tileService.GetTileAsync(1, movedGrid2b.Coord, 0);
+        Assert.NotNull(movedTile2a);
+        Assert.NotNull(movedTile2b);
+        Assert.Equal(tile2aPath, movedTile2a.File); // Should preserve original file path
+        Assert.Equal(tile2bPath, movedTile2b.File);
+
+        // 6. Verify that zoom level 1 was generated for the merged tiles
+        // The parent of the moved tiles should have a zoom tile
+        var zoom1Coord = movedGrid2a.Coord.Parent();
+        var zoom1Tile = await _tileService.GetTileAsync(1, zoom1Coord, 1);
         Assert.NotNull(zoom1Tile);
         Assert.NotEmpty(zoom1Tile.File);
 
@@ -197,19 +229,15 @@ public class GridServiceMapMergeTests : IDisposable
         var zoom1FilePath = Path.Combine(_testGridStorage, zoom1Tile.File);
         Assert.True(File.Exists(zoom1FilePath), $"Zoom 1 tile file should exist at {zoom1FilePath}");
 
-        // 4. Verify higher zoom levels were generated
+        // 7. Verify higher zoom levels were generated (zoom 2-6)
+        var currentCoord = zoom1Coord;
         for (int z = 2; z <= 6; z++)
         {
-            var coord = new Coord(0, 0);
-            for (int i = 1; i < z; i++)
-            {
-                coord = coord.Parent();
-            }
-            
-            var zoomTile = await _tileService.GetTileAsync(1, coord, z);
+            currentCoord = currentCoord.Parent();
+            var zoomTile = await _tileService.GetTileAsync(1, currentCoord, z);
             Assert.NotNull(zoomTile);
             Assert.NotEmpty(zoomTile.File);
-            
+
             var zoomFilePath = Path.Combine(_testGridStorage, zoomTile.File);
             Assert.True(File.Exists(zoomFilePath), $"Zoom {z} tile file should exist at {zoomFilePath}");
         }
@@ -233,7 +261,7 @@ public class GridServiceMapMergeTests : IDisposable
 
         // Create a blue test tile
         var sourceTilePath = await CreateTestTileAsync("sourceGrid", 0, 0, 255);
-        await _tileService.SaveTileAsync(10, new Coord(3, 4), 0, sourceTilePath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "default-tenant-1", 0);
+        await _tileService.SaveTileAsync(10, new Coord(3, 4), 0, sourceTilePath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), TestTenantId, 0);
 
         // Create a target map
         var targetMap = new MapInfo { Id = 20, Name = "TargetMap", Hidden = false, Priority = 1 }; // Higher priority

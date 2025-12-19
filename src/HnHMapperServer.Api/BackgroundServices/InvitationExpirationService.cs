@@ -105,21 +105,32 @@ public class InvitationExpirationService : BackgroundService
         {
             try
             {
-                // Find and delete the pending TenantUser entry
+                // Find the TenantUser entry - only delete if still pending (JoinedAt == default)
                 var tenantUser = await dbContext.TenantUsers
                     .IgnoreQueryFilters()
                     .FirstOrDefaultAsync(tu => tu.UserId == invitation.UsedBy && tu.TenantId == invitation.TenantId);
 
                 if (tenantUser != null)
                 {
-                    dbContext.TenantUsers.Remove(tenantUser);
+                    // Safety check: only delete if user was never approved
+                    if (tenantUser.JoinedAt == default)
+                    {
+                        dbContext.TenantUsers.Remove(tenantUser);
+                        deletedCount++;
+                        _logger.LogInformation("Removing pending TenantUser {UserId} from tenant {TenantId} (never approved after 7 days)",
+                            invitation.UsedBy, invitation.TenantId);
+                    }
+                    else
+                    {
+                        // User was approved but invitation flag wasn't cleared - fix it now
+                        _logger.LogWarning("Skipping deletion of approved user {UserId} in tenant {TenantId} - fixing stale invitation flag",
+                            invitation.UsedBy, invitation.TenantId);
+                    }
                 }
 
                 // Mark invitation as expired
                 invitation.Status = "Expired";
                 invitation.PendingApproval = false;
-
-                deletedCount++;
             }
             catch (Exception ex)
             {

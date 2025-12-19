@@ -129,11 +129,15 @@ public static class SuperadminEndpoints
     /// Lists all tenants with statistics (user count, storage usage, etc.)
     /// </summary>
     private static async Task<IResult> GetAllTenants(
-        ApplicationDbContext db)
+        ApplicationDbContext db,
+        ITenantActivityService activityService)
     {
         var tenants = await db.Tenants
             .IgnoreQueryFilters() // Superadmin sees all tenants
             .ToListAsync();
+
+        // Get merged activity times (in-memory cache + database)
+        var activities = await activityService.GetAllLastActivitiesAsync();
 
         var tenantDtos = new List<TenantListDto>();
 
@@ -158,7 +162,8 @@ public static class SuperadminEndpoints
                 CreatedAt = tenant.CreatedAt,
                 IsActive = tenant.IsActive,
                 UserCount = userCount,
-                TokenCount = tokenCount
+                TokenCount = tokenCount,
+                LastActivityAt = activities.TryGetValue(tenant.Id, out var activity) ? activity : null
             });
         }
 

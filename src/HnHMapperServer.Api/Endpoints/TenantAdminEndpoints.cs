@@ -230,8 +230,18 @@ public static class TenantAdminEndpoints
             return Results.NotFound(new { error = "Pending user not found" });
         }
 
-        // Approve user by setting JoinedAt
+        // Approve user by setting JoinedAt and clearing PendingApproval
         tenantUser.JoinedAt = DateTime.UtcNow;
+        tenantUser.PendingApproval = false;
+
+        // Also update the invitation's PendingApproval flag to prevent cleanup service from deleting this user
+        var invitation = await db.TenantInvitations
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(i => i.UsedBy == userId && i.TenantId == tenantId && i.PendingApproval);
+        if (invitation != null)
+        {
+            invitation.PendingApproval = false;
+        }
 
         // Add permissions
         foreach (var permission in dto.Permissions)
