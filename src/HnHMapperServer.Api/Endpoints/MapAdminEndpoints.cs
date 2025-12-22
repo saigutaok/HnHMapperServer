@@ -5,6 +5,7 @@ using HnHMapperServer.Core.Models;
 using HnHMapperServer.Infrastructure.Data;
 using HnHMapperServer.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace HnHMapperServer.Api.Endpoints;
 
@@ -214,6 +215,7 @@ public static class MapAdminEndpoints
     /// <summary>
     /// DELETE /admin/maps/{mapId}
     /// Deletes a map and all associated data (grids, tiles, markers).
+    /// Also deletes physical tile files from disk.
     /// Triggers SSE update and audit log.
     /// </summary>
     private static async Task<IResult> DeleteMap(
@@ -225,8 +227,10 @@ public static class MapAdminEndpoints
         ITenantContextAccessor tenantContext,
         IStorageQuotaService quotaService,
         IConfiguration configuration,
+        ILoggerFactory loggerFactory,
         HttpContext context)
     {
+        var logger = loggerFactory.CreateLogger("MapAdminEndpoints");
         var tenantId = tenantContext.GetCurrentTenantId();
         if (string.IsNullOrEmpty(tenantId))
         {
@@ -241,32 +245,121 @@ public static class MapAdminEndpoints
         }
 
         var mapName = map.Name;
+        var gridStorage = configuration.GetValue<string>("GridStorage") ?? "map";
 
-        // Count related data for audit log
-        var gridCount = await db.Grids.Where(g => g.Map == mapId && g.TenantId == tenantId).CountAsync();
-        var tileCount = await db.Tiles.Where(t => t.MapId == mapId && t.TenantId == tenantId).CountAsync();
+        // Collect grid IDs for marker deletion and file cleanup
+        var grids = await db.Grids
+            .Where(g => g.Map == mapId && g.TenantId == tenantId)
+            .ToListAsync();
+        var gridIds = grids.Select(g => g.Id).ToList();
 
-        // Markers are related to Grids, so join to find markers for this map
-        var gridIds = db.Grids.Where(g => g.Map == mapId && g.TenantId == tenantId).Select(g => g.Id).ToList();
-        var markerCount = await db.Markers.Where(m => gridIds.Contains(m.GridId) && m.TenantId == tenantId).CountAsync();
+        // Collect tile file paths before deletion for file system cleanup
+        var tiles = await db.Tiles
+            .Where(t => t.MapId == mapId && t.TenantId == tenantId)
+            .ToListAsync();
 
-        var customMarkerCount = await db.CustomMarkers.Where(cm => cm.MapId == mapId && cm.TenantId == tenantId).CountAsync();
+        // Delete dirty zoom tiles for this map
+        var dirtyTiles = await db.DirtyZoomTiles
+            .Where(d => d.MapId == mapId && d.TenantId == tenantId)
+            .ToListAsync();
+        db.DirtyZoomTiles.RemoveRange(dirtyTiles);
 
-        // Delete all related data (EF Core will handle this via cascade delete if configured)
-        // Manually delete to ensure tenant isolation
-        db.Grids.RemoveRange(db.Grids.Where(g => g.Map == mapId && g.TenantId == tenantId));
-        db.Tiles.RemoveRange(db.Tiles.Where(t => t.MapId == mapId && t.TenantId == tenantId));
+        // Delete all related database records
+        db.Grids.RemoveRange(grids);
+        db.Tiles.RemoveRange(tiles);
 
         // Delete markers that belong to grids in this map
-        db.Markers.RemoveRange(db.Markers.Where(m => gridIds.Contains(m.GridId) && m.TenantId == tenantId));
+        var markers = await db.Markers.Where(m => gridIds.Contains(m.GridId) && m.TenantId == tenantId).ToListAsync();
+        db.Markers.RemoveRange(markers);
 
-        db.CustomMarkers.RemoveRange(db.CustomMarkers.Where(cm => cm.MapId == mapId && cm.TenantId == tenantId));
+        var customMarkers = await db.CustomMarkers.Where(cm => cm.MapId == mapId && cm.TenantId == tenantId).ToListAsync();
+        db.CustomMarkers.RemoveRange(customMarkers);
 
-        // Delete the map itself
-        await mapRepository.DeleteMapAsync(mapId);
+        // Delete roads associated with this map
+        var roads = await db.Roads.Where(r => r.MapId == mapId && r.TenantId == tenantId).ToListAsync();
+        db.Roads.RemoveRange(roads);
 
-        // Trigger storage quota recalculation
-        var gridStorage = configuration.GetValue<string>("GridStorage") ?? "map";
+        // Delete overlay data for this map
+        var overlayData = await db.OverlayData.Where(o => o.MapId == mapId && o.TenantId == tenantId).ToListAsync();
+        db.OverlayData.RemoveRange(overlayData);
+
+        // Delete overlay offsets that reference this map (as either current or overlay map)
+        var overlayOffsets = await db.OverlayOffsets
+            .Where(o => (o.CurrentMapId == mapId || o.OverlayMapId == mapId) && o.TenantId == tenantId)
+            .ToListAsync();
+        db.OverlayOffsets.RemoveRange(overlayOffsets);
+
+        // Delete the map record
+        var mapEntity = await db.Maps.FirstOrDefaultAsync(m => m.Id == mapId && m.TenantId == tenantId);
+        if (mapEntity != null)
+        {
+            db.Maps.Remove(mapEntity);
+        }
+
+        // Save all database changes in one transaction
+        await db.SaveChangesAsync();
+
+        // Delete physical tile files from disk
+        var deletedFiles = 0;
+        var deletedDirectories = 0;
+
+        // Delete tile files (zoom tiles stored at tenants/{tenantId}/{mapId}/{zoom}/*.png)
+        foreach (var tile in tiles)
+        {
+            if (!string.IsNullOrEmpty(tile.File))
+            {
+                var filePath = Path.Combine(gridStorage, tile.File);
+                try
+                {
+                    if (File.Exists(filePath))
+                    {
+                        File.Delete(filePath);
+                        deletedFiles++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to delete tile file: {FilePath}", filePath);
+                }
+            }
+        }
+
+        // Delete grid files (stored at tenants/{tenantId}/grids/{gridId}.png)
+        foreach (var gridId in gridIds)
+        {
+            var gridFilePath = Path.Combine(gridStorage, "tenants", tenantId, "grids", $"{gridId}.png");
+            try
+            {
+                if (File.Exists(gridFilePath))
+                {
+                    File.Delete(gridFilePath);
+                    deletedFiles++;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to delete grid file: {FilePath}", gridFilePath);
+            }
+        }
+
+        // Delete empty map directory and zoom subdirectories
+        var mapDirectory = Path.Combine(gridStorage, "tenants", tenantId, mapId.ToString());
+        if (Directory.Exists(mapDirectory))
+        {
+            try
+            {
+                // Delete recursively (all zoom level directories)
+                Directory.Delete(mapDirectory, recursive: true);
+                deletedDirectories++;
+                logger.LogInformation("Deleted map directory: {MapDirectory}", mapDirectory);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to delete map directory: {MapDirectory}", mapDirectory);
+            }
+        }
+
+        // Recalculate storage quota after file deletion
         await quotaService.RecalculateStorageUsageAsync(tenantId, gridStorage);
 
         // Trigger SSE update for real-time UI refresh
@@ -280,13 +373,16 @@ public static class MapAdminEndpoints
             Action = "MapDeleted",
             EntityType = "Map",
             EntityId = mapId.ToString(),
-            OldValue = $"Name: {mapName}, Grids: {gridCount}, Tiles: {tileCount}, Markers: {markerCount}, CustomMarkers: {customMarkerCount}",
+            OldValue = $"Name: {mapName}, Grids: {grids.Count}, Tiles: {tiles.Count}, Markers: {markers.Count}, CustomMarkers: {customMarkers.Count}, Roads: {roads.Count}, Overlays: {overlayData.Count}, Files: {deletedFiles}",
             NewValue = null
         });
 
+        logger.LogInformation("Deleted map {MapId} '{MapName}': {GridCount} grids, {TileCount} tiles, {MarkerCount} markers, {CustomMarkerCount} custom markers, {RoadCount} roads, {OverlayCount} overlays, {DeletedFiles} files, {DeletedDirs} directories",
+            mapId, mapName, grids.Count, tiles.Count, markers.Count, customMarkers.Count, roads.Count, overlayData.Count, deletedFiles, deletedDirectories);
+
         return Results.Ok(new DeleteMapResponse
         {
-            Message = $"Map '{mapName}' deleted with {gridCount} grids, {tileCount} tiles, {markerCount} markers, and {customMarkerCount} custom markers"
+            Message = $"Map '{mapName}' deleted with {grids.Count} grids, {tiles.Count} tiles, {markers.Count} markers, {customMarkers.Count} custom markers, {roads.Count} roads, and {deletedFiles} files"
         });
     }
 
