@@ -52,6 +52,9 @@ public static class TenantAdminEndpoints
         // POST /api/tenants/{tenantId}/config/main-map - Set main map
         group.MapPost("/config/main-map", SetMainMap);
 
+        // PUT /api/tenants/{tenantId}/config/map-upload-settings - Update map upload settings
+        group.MapPut("/config/map-upload-settings", UpdateMapUploadSettings);
+
         // GET /api/tenants/{tenantId}/audit-logs - Get tenant audit logs
         group.MapGet("/audit-logs", GetTenantAuditLogs);
 
@@ -230,8 +233,18 @@ public static class TenantAdminEndpoints
             return Results.NotFound(new { error = "Pending user not found" });
         }
 
-        // Approve user by setting JoinedAt
+        // Approve user by setting JoinedAt and clearing PendingApproval
         tenantUser.JoinedAt = DateTime.UtcNow;
+        tenantUser.PendingApproval = false;
+
+        // Also update the invitation's PendingApproval flag to prevent cleanup service from deleting this user
+        var invitation = await db.TenantInvitations
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(i => i.UsedBy == userId && i.TenantId == tenantId && i.PendingApproval);
+        if (invitation != null)
+        {
+            invitation.PendingApproval = false;
+        }
 
         // Add permissions
         foreach (var permission in dto.Permissions)
@@ -852,6 +865,42 @@ public static class TenantAdminEndpoints
     }
 
     /// <summary>
+    /// PUT /api/tenants/{tenantId}/config/map-upload-settings
+    /// Updates map upload settings (allowGridUpdates, allowNewMaps) for the tenant.
+    /// </summary>
+    private static async Task<IResult> UpdateMapUploadSettings(
+        string tenantId,
+        UpdateMapUploadSettingsDto dto,
+        Core.Interfaces.IConfigRepository configRepository,
+        HttpContext context,
+        ILogger<Program> logger)
+    {
+        // Verify user has access to this tenant (unless SuperAdmin)
+        if (!context.User.IsInRole(AuthorizationConstants.Roles.SuperAdmin))
+        {
+            var currentTenantId = context.User.FindFirst(AuthorizationConstants.ClaimTypes.TenantId)?.Value;
+            if (currentTenantId != tenantId)
+            {
+                return Results.Forbid();
+            }
+        }
+
+        // Get current config
+        var config = await configRepository.GetConfigAsync();
+
+        // Update settings
+        config.AllowGridUpdates = dto.AllowGridUpdates;
+        config.AllowNewMaps = dto.AllowNewMaps;
+
+        // Save config
+        await configRepository.SaveConfigAsync(config);
+
+        logger.LogInformation("Tenant {TenantId} map upload settings updated: AllowGridUpdates={AllowGridUpdates}, AllowNewMaps={AllowNewMaps}",
+            tenantId, dto.AllowGridUpdates, dto.AllowNewMaps);
+        return Results.Ok(new { message = "Map upload settings updated successfully" });
+    }
+
+    /// <summary>
     /// PUT /api/tenants/{tenantId}/discord-settings
     /// Updates Discord webhook settings for the tenant.
     /// </summary>
@@ -1303,6 +1352,15 @@ public static class TenantAdminEndpoints
     public sealed class SetMainMapDto
     {
         public int? MapId { get; set; }
+    }
+
+    /// <summary>
+    /// DTO for updating map upload settings
+    /// </summary>
+    public sealed class UpdateMapUploadSettingsDto
+    {
+        public bool AllowGridUpdates { get; set; } = true;
+        public bool AllowNewMaps { get; set; } = true;
     }
 
     /// <summary>

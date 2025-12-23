@@ -89,10 +89,16 @@ public static partial class ClientEndpoints
         IConfiguration configuration,
         HnHMapperServer.Api.Services.MapRevisionCache revisionCache,
         IUpdateNotificationService updateNotificationService,
+        ITenantActivityService activityService,
         ILogger<Program> logger)
     {
         if (!await ClientTokenHelpers.HasUploadAsync(context, db, tokenService, token, logger))
             return Results.Unauthorized();
+
+        // Record tenant activity
+        var tenantId = context.Items["TenantId"] as string;
+        if (!string.IsNullOrEmpty(tenantId))
+            activityService.RecordActivity(tenantId);
 
         // Read raw JSON and deserialize with case-insensitive options (Go client sends lowercase)
         var gridUpdate = await context.Request.ReadFromJsonAsync<GridUpdateDto>(new JsonSerializerOptions
@@ -104,7 +110,16 @@ public static partial class ClientEndpoints
             return Results.BadRequest("Invalid grid update payload");
 
         var gridStorage = configuration["GridStorage"] ?? "map";
-        var response = await gridService.ProcessGridUpdateAsync(gridUpdate, gridStorage);
+
+        GridRequestDto response;
+        try
+        {
+            response = await gridService.ProcessGridUpdateAsync(gridUpdate, gridStorage);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("disabled"))
+        {
+            return Results.Json(new { error = ex.Message }, statusCode: 403);
+        }
 
         // Bump map revision and notify clients to invalidate cache
         var newRevision = revisionCache.Increment(response.Map);
@@ -127,6 +142,8 @@ public static partial class ClientEndpoints
         IUpdateNotificationService updateNotificationService,
         IStorageQuotaService quotaService,
         ITenantFilePathService filePathService,
+        ITenantActivityService activityService,
+        IConfigRepository configRepository,
         ILogger<Program> logger)
     {
         if (!await ClientTokenHelpers.HasUploadAsync(context, db, tokenService, token, logger))
@@ -139,6 +156,17 @@ public static partial class ClientEndpoints
             logger.LogError("GridUpload: TenantId not found in context");
             return Results.Unauthorized();
         }
+
+        // Check if grid updates are allowed for this tenant
+        var config = await configRepository.GetConfigAsync();
+        if (!config.AllowGridUpdates)
+        {
+            logger.LogWarning("GridUpload: Grid updates are disabled for tenant {TenantId}", tenantId);
+            return Results.Json(new { error = "Grid updates are disabled for this tenant" }, statusCode: 403);
+        }
+
+        // Record tenant activity
+        activityService.RecordActivity(tenantId);
 
         var request = context.Request;
 
@@ -454,10 +482,16 @@ public static partial class ClientEndpoints
         ITokenService tokenService,
         IGridRepository gridRepository,
         ICharacterService characterService,
+        ITenantActivityService activityService,
         ILogger<Program> logger)
     {
         if (!await ClientTokenHelpers.HasUploadAsync(context, db, tokenService, token, logger))
             return Results.Unauthorized();
+
+        // Record tenant activity
+        var tenantId = context.Items["TenantId"] as string;
+        if (!string.IsNullOrEmpty(tenantId))
+            activityService.RecordActivity(tenantId);
 
         // Read raw JSON with case-insensitive options (Go client sends lowercase: coords, gridID, name, etc.)
         var positions = await context.Request.ReadFromJsonAsync<Dictionary<string, Dictionary<string, object>>>(new JsonSerializerOptions
@@ -549,8 +583,8 @@ public static partial class ClientEndpoints
                 continue;
             }
 
-            // Extract tenant ID from context (set by TenantContextMiddleware via token validation)
-            var tenantId = context.Items["TenantId"] as string ?? string.Empty;
+            // Use tenant ID from context (set by TenantContextMiddleware via token validation)
+            var characterTenantId = context.Items["TenantId"] as string ?? string.Empty;
 
             var character = new Character
             {
@@ -564,7 +598,7 @@ public static partial class ClientEndpoints
                 Rotation = rotation,
                 Speed = speed,
                 Updated = DateTime.UtcNow,
-                TenantId = tenantId
+                TenantId = characterTenantId
             };
 
             characterService.UpdateCharacter(id, character);

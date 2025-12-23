@@ -51,6 +51,7 @@
                     <MudTh>Storage</MudTh>
                     <MudTh>Status</MudTh>
                     <MudTh>Created</MudTh>
+                    <MudTh>Last Activity</MudTh>
                     <MudTh>Actions</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -86,6 +87,24 @@
                     </MudTd>
                     <MudTd DataLabel="Created">
                         <MudText Typo="Typo.body2">@context.CreatedAt.ToString("yyyy-MM-dd")</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Last Activity">
+                        @if (context.LastActivityAt.HasValue)
+                        {
+                            var timeSince = DateTime.UtcNow - context.LastActivityAt.Value;
+                            var activityColor = timeSince.TotalDays > 30 ? Color.Error
+                                : timeSince.TotalDays > 7 ? Color.Warning
+                                : Color.Success;
+                            <MudTooltip Text="@($"{context.LastActivityAt.Value:yyyy-MM-dd HH:mm:ss} UTC")">
+                                <MudChip T="string" Size="Size.Small" Color="@activityColor">
+                                    @FormatTimeAgo(context.LastActivityAt.Value)
+                                </MudChip>
+                            </MudTooltip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Never</MudChip>
+                        }
                     </MudTd>
                     <MudTd DataLabel="Actions">
                         <MudStack Row="true" Spacing="1">
@@ -282,5 +301,24 @@
             return $"{(mb / 1024):F2} GB";
         }
         return $"{mb:F0} MB";
+    }
+
+    private string FormatTimeAgo(DateTime dateTime)
+    {
+        var timeSince = DateTime.UtcNow - dateTime;
+
+        if (timeSince.TotalMinutes < 1)
+            return "Just now";
+        if (timeSince.TotalMinutes < 60)
+            return $"{(int)timeSince.TotalMinutes}m ago";
+        if (timeSince.TotalHours < 24)
+            return $"{(int)timeSince.TotalHours}h ago";
+        if (timeSince.TotalDays < 7)
+            return $"{(int)timeSince.TotalDays}d ago";
+        if (timeSince.TotalDays < 30)
+            return $"{(int)(timeSince.TotalDays / 7)}w ago";
+        if (timeSince.TotalDays < 365)
+            return $"{(int)(timeSince.TotalDays / 30)}mo ago";
+        return $"{(int)(timeSince.TotalDays / 365)}y ago";
     }
 }

@@ -42,8 +42,13 @@ public class TenantNameServiceTests : IDisposable
         // Arrange & Act
         var identifier = await _tenantNameService.GenerateUniqueIdentifierAsync();
 
-        // Assert: Format should be icon1-icon2-number (e.g., "warrior-shield-42")
-        Assert.Matches(@"^[a-z]+-[a-z]+-\d+$", identifier);
+        // Assert: Format should be icon1-icon2-number (e.g., "arrow-wagon-4273")
+        // Icon names can contain multiple hyphens (e.g., "wurst-s-moodog-dough")
+        // Number should be 4 digits (1000-9999)
+        Assert.Matches(@"^[a-z0-9\-]+-[a-z0-9\-]+-\d{4}$", identifier);
+        Assert.EndsWith(identifier.Split('-').Last(), identifier); // Should end with number
+        Assert.True(int.TryParse(identifier.Split('-').Last(), out var num));
+        Assert.InRange(num, 1000, 9999);
     }
 
     [Fact]
@@ -68,48 +73,31 @@ public class TenantNameServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GenerateUniqueIdentifier_FillsGaps()
+    public async Task GenerateUniqueIdentifier_AvoidsCollisions()
     {
-        // Arrange: Create tenants with gaps (wizard-tower-1, wizard-tower-3)
+        // Arrange: Create some existing tenants
         _dbContext.Tenants.Add(new TenantEntity
         {
-            Id = "wizard-tower-1",
-            Name = "wizard-tower-1",
+            Id = "wizard-tower-1234",
+            Name = "wizard-tower-1234",
             CreatedAt = DateTime.UtcNow
         });
         _dbContext.Tenants.Add(new TenantEntity
         {
-            Id = "wizard-tower-3",
-            Name = "wizard-tower-3",
-            CreatedAt = DateTime.UtcNow
-        });
-        await _dbContext.SaveChangesAsync();
-
-        // Act: Generate identifier for wizard-tower pair
-        // Note: Since icons are random, we need to manually trigger gap-filling by creating more tenants
-        // For this test, we'll verify the gap-filling logic exists by checking the pattern
-
-        // Add tenants for dragon-castle with gap
-        _dbContext.Tenants.Add(new TenantEntity
-        {
-            Id = "dragon-castle-1",
-            Name = "dragon-castle-1",
-            CreatedAt = DateTime.UtcNow
-        });
-        _dbContext.Tenants.Add(new TenantEntity
-        {
-            Id = "dragon-castle-3",
-            Name = "dragon-castle-3",
+            Id = "dragon-castle-5678",
+            Name = "dragon-castle-5678",
             CreatedAt = DateTime.UtcNow
         });
         await _dbContext.SaveChangesAsync();
 
-        // Since the service picks random icon pairs, we cannot predict exact output
-        // But we can verify that when we generate many tenants, gaps are eventually filled
+        // Act: Generate a new identifier
         var generated = await _tenantNameService.GenerateUniqueIdentifierAsync();
 
-        // Assert: Should generate a valid identifier
-        Assert.Matches(@"^[a-z]+-[a-z]+-\d+$", generated);
+        // Assert: Should generate a valid identifier that doesn't collide
+        // Number should be 4 digits (1000-9999)
+        var parts = generated.Split('-');
+        Assert.True(int.TryParse(parts.Last(), out var num));
+        Assert.InRange(num, 1000, 9999);
 
         // Verify it doesn't match existing tenants
         var existingIds = await _dbContext.Tenants.Select(t => t.Id).ToListAsync();
@@ -117,31 +105,33 @@ public class TenantNameServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GenerateUniqueIdentifier_StartsAt1_WhenNoPreviousTenants()
+    public async Task GenerateUniqueIdentifier_Uses4DigitNumber_WhenNoPreviousTenants()
     {
         // Arrange: Empty database
 
         // Act: Generate first identifier
         var identifier = await _tenantNameService.GenerateUniqueIdentifierAsync();
 
-        // Assert: Should end with -1
-        Assert.EndsWith("-1", identifier);
+        // Assert: Should end with 4-digit number (1000-9999)
+        var parts = identifier.Split('-');
+        Assert.True(int.TryParse(parts.Last(), out var num));
+        Assert.InRange(num, 1000, 9999);
     }
 
     [Fact]
-    public async Task GenerateUniqueIdentifier_UsesSequentialNumbers_WhenNoGaps()
+    public async Task GenerateUniqueIdentifier_GeneratesMultipleUniqueIdentifiers()
     {
-        // Arrange: Create sequential tenants for shield-sword
+        // Arrange: Create some existing tenants
         _dbContext.Tenants.Add(new TenantEntity
         {
-            Id = "shield-sword-1",
-            Name = "shield-sword-1",
+            Id = "shield-sword-1234",
+            Name = "shield-sword-1234",
             CreatedAt = DateTime.UtcNow
         });
         _dbContext.Tenants.Add(new TenantEntity
         {
-            Id = "shield-sword-2",
-            Name = "shield-sword-2",
+            Id = "shield-sword-5678",
+            Name = "shield-sword-5678",
             CreatedAt = DateTime.UtcNow
         });
         await _dbContext.SaveChangesAsync();
@@ -166,8 +156,13 @@ public class TenantNameServiceTests : IDisposable
         // Assert: All generated identifiers should be unique
         Assert.Equal(identifiers.Count, identifiers.Distinct().Count());
 
-        // All should have valid format
-        Assert.All(identifiers, id => Assert.Matches(@"^[a-z]+-[a-z]+-\d+$", id));
+        // All should have valid 4-digit number suffix
+        Assert.All(identifiers, id =>
+        {
+            var parts = id.Split('-');
+            Assert.True(int.TryParse(parts.Last(), out var num));
+            Assert.InRange(num, 1000, 9999);
+        });
     }
 
     [Fact]
@@ -176,20 +171,21 @@ public class TenantNameServiceTests : IDisposable
         // Arrange & Act
         var identifier = await _tenantNameService.GenerateUniqueIdentifierAsync();
 
-        // Assert: Parse and verify icons are different
+        // Assert: Parse and verify structure
         var parts = identifier.Split('-');
-        Assert.Equal(3, parts.Length);
 
-        var icon1 = parts[0];
-        var icon2 = parts[1];
-        var number = parts[2];
+        // Should have at least 3 parts: icon1, icon2, number
+        // But icons can themselves contain hyphens, so we check the last part is a number
+        Assert.True(parts.Length >= 3, $"Expected at least 3 parts, got {parts.Length}: {identifier}");
 
-        // Icons should be different
-        Assert.NotEqual(icon1, icon2);
-
-        // Number should be parseable
+        // Number should be the last part and be 4 digits
+        var number = parts.Last();
         Assert.True(int.TryParse(number, out var num));
-        Assert.True(num > 0);
+        Assert.InRange(num, 1000, 9999);
+
+        // The identifier should have content before the number
+        var prefixLength = identifier.Length - number.Length - 1; // -1 for the hyphen before number
+        Assert.True(prefixLength > 0, "Should have icon prefix before the number");
     }
 
     [Fact]

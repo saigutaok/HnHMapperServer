@@ -5,6 +5,7 @@ using HnHMapperServer.Infrastructure.Data;
 using HnHMapperServer.Infrastructure.Repositories;
 using HnHMapperServer.Services.Interfaces;
 using HnHMapperServer.Services.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -23,19 +24,27 @@ public class CustomMarkerServiceTests : IDisposable
     private readonly ICustomMarkerService _customMarkerService;
     private readonly Mock<IIconCatalogService> _mockIconCatalog;
 
+    private const string TestTenantId = "test-tenant-1";
+
     public CustomMarkerServiceTests()
     {
+        // Create mock HttpContextAccessor to set tenant ID for EF Core query filters
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items["TenantId"] = TestTenantId;
+        var mockHttpContextAccessor = new Mock<IHttpContextAccessor>();
+        mockHttpContextAccessor.Setup(x => x.HttpContext).Returns(httpContext);
+
         // Create in-memory database for testing
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
 
-        _dbContext = new ApplicationDbContext(options);
+        _dbContext = new ApplicationDbContext(options, mockHttpContextAccessor.Object);
 
-        // Mock tenant context accessor (return null to disable tenant filtering in tests)
+        // Mock tenant context accessor with a test tenant
         var mockTenantContext = new Mock<ITenantContextAccessor>();
-        mockTenantContext.Setup(x => x.GetCurrentTenantId()).Returns((string?)null);
-        mockTenantContext.Setup(x => x.GetRequiredTenantId()).Throws(new InvalidOperationException("No tenant in test context"));
+        mockTenantContext.Setup(x => x.GetCurrentTenantId()).Returns(TestTenantId);
+        mockTenantContext.Setup(x => x.GetRequiredTenantId()).Returns(TestTenantId);
 
         // Initialize repository
         _customMarkerRepository = new CustomMarkerRepository(_dbContext, mockTenantContext.Object);
@@ -66,6 +75,18 @@ public class CustomMarkerServiceTests : IDisposable
     /// </summary>
     private void SeedTestData()
     {
+        // Create a test tenant
+        var tenant = new TenantEntity
+        {
+            Id = TestTenantId,
+            Name = "Test Tenant",
+            StorageQuotaMB = 1024,
+            CurrentStorageMB = 0,
+            CreatedAt = DateTime.UtcNow,
+            IsActive = true
+        };
+        _dbContext.Tenants.Add(tenant);
+
         // Create a test map
         var map = new MapInfoEntity
         {
@@ -73,7 +94,8 @@ public class CustomMarkerServiceTests : IDisposable
             Name = "Test Map",
             Hidden = false,
             Priority = 0,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            TenantId = TestTenantId
         };
         _dbContext.Maps.Add(map);
 
@@ -84,7 +106,8 @@ public class CustomMarkerServiceTests : IDisposable
             CoordX = 0,
             CoordY = 0,
             Map = 1,
-            NextUpdate = DateTime.UtcNow.AddDays(1)
+            NextUpdate = DateTime.UtcNow.AddDays(1),
+            TenantId = TestTenantId
         };
         _dbContext.Grids.Add(grid);
 
@@ -452,7 +475,8 @@ public class CustomMarkerServiceTests : IDisposable
             Name = "Map 2",
             Hidden = false,
             Priority = 0,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            TenantId = TestTenantId
         };
         _dbContext.Maps.Add(map2);
 
@@ -462,7 +486,8 @@ public class CustomMarkerServiceTests : IDisposable
             CoordX = 5,
             CoordY = 5,
             Map = 2,
-            NextUpdate = DateTime.UtcNow.AddDays(1)
+            NextUpdate = DateTime.UtcNow.AddDays(1),
+            TenantId = TestTenantId
         };
         _dbContext.Grids.Add(grid2);
         _dbContext.SaveChanges();

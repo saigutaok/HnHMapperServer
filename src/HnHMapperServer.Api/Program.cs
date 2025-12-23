@@ -123,6 +123,7 @@ builder.Services.AddSingleton<ICharacterService, CharacterService>();
 builder.Services.AddSingleton<HnHMapperServer.Api.Services.MapRevisionCache>();
 builder.Services.AddSingleton<IBuildInfoProvider, BuildInfoProvider>();
 builder.Services.AddSingleton<IPendingMarkerService, PendingMarkerService>();  // In-memory queue for markers before grids exist
+builder.Services.AddSingleton<ITenantActivityService, TenantActivityService>();  // Tenant activity tracking with in-memory cache
 builder.Services.AddScoped<ITileService, TileService>();
 builder.Services.AddScoped<IGridService, GridService>();
 builder.Services.AddScoped<IMarkerService, MarkerService>();
@@ -194,6 +195,7 @@ builder.Services.AddHostedService<TimerCheckService>(); // Timer monitoring and 
 builder.Services.AddHostedService<PreviewCleanupService>(); // Map preview cleanup service (7 day retention)
 builder.Services.AddHostedService<HmapTempCleanupService>(); // HMAP temp file cleanup service (7 day retention)
 builder.Services.AddHostedService<OrphanedMarkerCleanupService>(); // Orphaned marker cleanup service
+builder.Services.AddHostedService<TenantActivityFlushService>(); // Tenant activity flush service (2-min interval)
 
 // Configure shared data protection for cookie sharing with Web
 var dataProtectionPath = Path.Combine(
