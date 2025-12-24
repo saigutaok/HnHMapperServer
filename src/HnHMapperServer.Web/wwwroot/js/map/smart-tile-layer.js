@@ -6,6 +6,8 @@ import { TileSize, HnHMinZoom, HnHMaxZoom } from './leaflet-config.js';
 // Smart Tile Layer with caching and smooth transitions
 export const SmartTileLayer = L.TileLayer.extend({
     cache: {},              // Per-map cache: { mapId: { tileKey: { etag, state } } }
+    cacheKeys: [],          // Track insertion order for LRU eviction: [{ mapId, tileKey }]
+    maxCacheEntries: 1000,  // Maximum TOTAL cache entries across all maps (prevents GB memory usage)
     mapId: 0,
     offsetX: 0,             // X offset for overlay comparison (in grid coordinates, zoom-independent)
     offsetY: 0,             // Y offset for overlay comparison (in grid coordinates, zoom-independent)

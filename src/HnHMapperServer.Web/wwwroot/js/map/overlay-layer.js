@@ -447,7 +447,13 @@ export function initializeOverlayLayer(mapInstance) {
 export function setOverlayMapId(mapId) {
     if (currentMapId !== mapId) {
         currentMapId = mapId;
-        // Clear cache for new map (keep other maps' cache)
+        // Clear ALL overlay cache on map switch to prevent memory accumulation
+        // Each map's overlay data can be tens of MB - keeping all maps cached leads to GB memory usage
+        for (const key in overlayCache) {
+            delete overlayCache[key];
+        }
+        // Also clear active tiles tracking
+        activeTiles.clear();
         if (overlayCanvasLayer && overlayCanvasLayer._map) {
             overlayCanvasLayer.redraw();
         }

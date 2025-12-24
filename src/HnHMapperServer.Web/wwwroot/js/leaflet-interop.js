@@ -638,7 +638,11 @@ export function changeMap(mapId) {
         });
     }
 
-    // Force tile reload by invalidating the layer
+    // Force tile cleanup and reload - this releases the old tile DOM elements from memory
+    // Without this, _tiles accumulates across map switches (each tile = ~400KB decoded)
+    if (mainLayer._removeAllTiles) {
+        mainLayer._removeAllTiles();
+    }
     mainLayer.redraw();
 
     // Also invalidate size to trigger full reload
@@ -792,6 +796,18 @@ export function refreshTile(mapId, x, y, z, timestamp) {
 
     // Store cache entry with etag (timestamp)
     mainLayer.cache[mapId][tileKey] = { etag: timestamp };
+
+    // Track in cacheKeys for LRU eviction (total entries across all maps)
+    const fullCacheKey = `${mapId}:${tileKey}`;
+    mainLayer.cacheKeys.push({ mapId, tileKey });
+
+    // Evict oldest entries if over limit
+    while (mainLayer.cacheKeys.length > mainLayer.maxCacheEntries) {
+        const oldest = mainLayer.cacheKeys.shift();
+        if (mainLayer.cache[oldest.mapId]) {
+            delete mainLayer.cache[oldest.mapId][oldest.tileKey];
+        }
+    }
 
     let refreshedAny = false;
 
