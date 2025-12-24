@@ -1954,57 +1954,26 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         {
             isReconnecting = false;
 
-            Logger.LogInformation("Circuit reconnected - rehydrating state");
+            Logger.LogInformation("Circuit reconnected");
 
+            // Resume marker update timer
             markerUpdateTimer?.Change(60000, 60000);
 
+            // SSE handles reconnection internally (checks if already connected)
             if (sseModule != null && sseDotnetRef != null)
             {
                 try
                 {
                     await sseModule.InvokeVoidAsync("initializeSseUpdates", sseDotnetRef);
-                    Logger.LogInformation("Browser SSE reconnected after circuit recovery");
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogWarning(ex, "Failed to reconnect browser SSE after circuit recovery");
+                    Logger.LogWarning(ex, "Failed to reconnect browser SSE");
                 }
             }
 
-            if (mapView != null)
-            {
-                try
-                {
-                    await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
-
-                    // Diagnostic: Log if this was attempting to restore view (could cause zoom resets)
-                    Logger.LogWarning("Circuit reconnection - NOT restoring view position. Previous coords: ({X},{Y}) zoom {Zoom}",
-                        MapNavigation.CenterX, MapNavigation.CenterY, MapNavigation.Zoom);
-
-                    // REMOVED: await mapView.SetViewAsync(...) - This was causing random zoom resets
-                    // User's current view position should be preserved by Leaflet across circuit reconnections
-
-                    if (MapNavigation.OverlayMapId.HasValue)
-                    {
-                        await mapView.SetOverlayMapAsync(MapNavigation.OverlayMapId);
-                    }
-
-                    foreach (var map in MapNavigation.Maps)
-                    {
-                        await mapView.SetMapRevisionAsync(map.ID, map.MapInfo.Revision);
-                    }
-
-                    Logger.LogInformation("Map state rehydrated successfully");
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to rehydrate map state after reconnect");
-                }
-            }
-
-            CustomMarkerState.MarkAsNeedingRender();
-            await TryRenderPendingCustomMarkersAsync();
-
+            // JavaScript state (Leaflet map, markers, tiles) is preserved across circuit reconnects
+            // No need to re-push everything to JS - just notify success
             Snackbar.Add("Reconnected successfully", Severity.Success);
             StateHasChanged();
         });
