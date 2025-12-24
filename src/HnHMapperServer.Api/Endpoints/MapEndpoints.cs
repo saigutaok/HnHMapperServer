@@ -467,9 +467,40 @@ public static class MapEndpoints
             return;
         }
 
+        // Optional client-side resync optimization:
+        // The web UI may reconnect its SSE EventSource when the tab is backgrounded/foregrounded.
+        // Re-sending the entire tile cache (~300k entries) on every reconnect can:
+        // - Create huge responses (tens of MB)
+        // - Cause long blocking `JSON.parse(...)` on the browser main thread
+        // - Lead to the "tab freezes for 30+ seconds" symptom
+        //
+        // To avoid that, the client can pass `?since=<lastSeenCache>` and we'll only send tiles that
+        // have a Cache value greater than that number (i.e., changed since the last successful sync).
+        //
+        // NOTE: Cache is currently treated as a monotonically increasing timestamp-like value.
+        // This is a pragmatic best-effort mechanism; if clients provide a too-new value, they may miss
+        // updates that occurred while disconnected.
+        int sinceCache = 0;
+        if (context.Request.Query.TryGetValue("since", out var sinceValues) &&
+            int.TryParse(sinceValues.ToString(), out var parsedSince) &&
+            parsedSince > 0)
+        {
+            sinceCache = parsedSince;
+        }
+
         // Send initial tile cache (from tenant-specific in-memory cache - prevents blocking database query)
         // SECURITY: Tile cache is now tenant-scoped to prevent cross-tenant data leakage
         var tenantTiles = await tileCacheService.GetAllTilesAsync(tenantId);
+
+        // If the client provided a `since` marker, only send tiles updated after that marker.
+        // This dramatically reduces the initial payload on reconnects.
+        if (sinceCache > 0)
+        {
+            tenantTiles = tenantTiles.Where(t => t.Cache > sinceCache).ToList();
+            logger.LogInformation("SSE: Client requested tiles since {SinceCache} for tenant {TenantId} - sending {Count} changed tiles",
+                sinceCache, tenantId, tenantTiles.Count);
+        }
+
         var tileCache = tenantTiles.Select(t => new TileCacheDto
         {
             M = t.MapId,
@@ -479,12 +510,18 @@ public static class MapEndpoints
             T = (int)t.Cache
         }).ToList();
 
-        logger.LogDebug("SSE: Sending {Count} tiles for tenant {TenantId}",
-            tileCache.Count, tenantId);
+        logger.LogDebug("SSE: Sending {Count} tiles for tenant {TenantId} (since={Since})",
+            tileCache.Count, tenantId, sinceCache);
 
-        var initialData = JsonSerializer.Serialize(tileCache);
-        await context.Response.WriteAsync($"data: {initialData}\n\n");
-        await context.Response.Body.FlushAsync();
+        // Only write an initial tile payload when there is something meaningful to send.
+        // When `since` is used it's common to have 0 deltas, and avoiding an empty message
+        // reduces pointless client work.
+        if (tileCache.Count > 0)
+        {
+            var initialData = JsonSerializer.Serialize(tileCache);
+            await context.Response.WriteAsync($"data: {initialData}\n\n");
+            await context.Response.Body.FlushAsync();
+        }
 
         // Send initial map revisions so clients can display version and set cache-busting immediately
         // SECURITY: Filter by tenant's maps to prevent cross-tenant data leakage

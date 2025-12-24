@@ -7,6 +7,18 @@ let isConnecting = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 5000; // 5 seconds max backoff
 
+// Track the highest tile cache token (T) we've seen.
+//
+// Why:
+// - The server may (re)send a large "initial tile cache" payload on SSE connect.
+// - If the browser tab is backgrounded, the SSE connection may drop and reconnect when the tab returns.
+// - Re-sending the full tile cache (~300k entries) on each reconnect can freeze the browser.
+// - We therefore reconnect with `?since=<lastTileCache>` to request only tiles updated since we last synced.
+//
+// Note:
+// - This assumes tile cache tokens (T) are monotonically increasing in practice (timestamp-like).
+let lastTileCache = 0;
+
 /**
  * Initialize SSE connection to /map/updates with browser cookies
  * @param {object} dotnetReference - DotNet object reference for callbacks
@@ -49,10 +61,17 @@ function connectSse() {
     isConnecting = true;
 
     try {
-        console.warn('[SSE] Creating new EventSource for /map/updates');
+        // Build SSE URL. If we have previously processed any tile cache tokens, request only the
+        // delta since that token. This prevents huge re-sync payloads (and browser freezes) on reconnect.
+        let url = '/map/updates';
+        if (typeof lastTileCache === 'number' && Number.isFinite(lastTileCache) && lastTileCache > 0) {
+            url += `?since=${encodeURIComponent(String(lastTileCache))}`;
+        }
+
+        console.warn('[SSE] Creating new EventSource for', url);
 
         // EventSource automatically includes cookies for same-origin requests
-        eventSource = new EventSource('/map/updates', {
+        eventSource = new EventSource(url, {
             withCredentials: true
         });
 
@@ -87,6 +106,23 @@ function connectSse() {
             try {
                 const tiles = JSON.parse(event.data);
                 if (tiles && Array.isArray(tiles) && tiles.length > 0) {
+                    // Update last seen cache token BEFORE applying (so reconnect uses a fresh `since` marker).
+                    // We intentionally do this in a tight loop (no allocations) for speed.
+                    // Accept both `T` and `t` for robustness.
+                    for (let i = 0; i < tiles.length; i++) {
+                        const t = tiles[i];
+                        const cache = t?.T ?? t?.t;
+                        if (typeof cache === 'number' && Number.isFinite(cache) && cache > lastTileCache) {
+                            lastTileCache = cache;
+                        }
+                    }
+
+                    // Expose for debugging (helps confirm reconnect delta behavior in DevTools).
+                    try {
+                        window.mapUpdates = window.mapUpdates || {};
+                        window.mapUpdates.lastTileCache = lastTileCache;
+                    } catch { /* ignore */ }
+
                     // FAST PATH:
                     // Apply tile updates directly in JS (Leaflet) to avoid JS -> .NET -> JS per-tile roundtrips.
                     // This is critical to prevent UI freezes when the tab returns to foreground and a burst of
