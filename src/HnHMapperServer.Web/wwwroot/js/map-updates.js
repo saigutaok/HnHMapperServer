@@ -87,6 +87,21 @@ function connectSse() {
             try {
                 const tiles = JSON.parse(event.data);
                 if (tiles && Array.isArray(tiles) && tiles.length > 0) {
+                    // FAST PATH:
+                    // Apply tile updates directly in JS (Leaflet) to avoid JS -> .NET -> JS per-tile roundtrips.
+                    // This is critical to prevent UI freezes when the tab returns to foreground and a burst of
+                    // updates arrives at once.
+                    try {
+                        const fastApply = window?.hnhMapper?.applyTileUpdates;
+                        if (typeof fastApply === 'function') {
+                            fastApply(tiles);
+                            return;
+                        }
+                    } catch {
+                        // If anything goes wrong, fall back to the legacy .NET path.
+                    }
+
+                    // Fallback: legacy path (JS -> .NET). Kept for backwards compatibility / early init cases.
                     invokeDotNetSafe('OnSseTileUpdates', tiles);
                 }
             } catch (e) {

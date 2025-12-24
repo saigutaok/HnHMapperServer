@@ -1673,18 +1673,19 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private void HandleTileUpdates(List<TileUpdate> updates)
     {
         if (mapView == null) return;
+        if (updates == null || updates.Count == 0) return;
 
         _ = InvokeAsync(async () =>
         {
             try
             {
+                // IMPORTANT:
+                // Tile updates can arrive in very large bursts (e.g. when the tab was backgrounded and then
+                // returns to foreground). Doing a JS interop call per tile can completely freeze the UI.
+                //
+                // We forward the batch to JS once; the JS side deduplicates and time-slices processing.
                 if (mapView != null)
-                {
-                    foreach (var update in updates)
-                    {
-                        await mapView.RefreshTileAsync(update.M, update.X, update.Y, update.Z, update.T);
-                    }
-                }
+                    await mapView.ApplyTileUpdatesAsync(updates);
             }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }

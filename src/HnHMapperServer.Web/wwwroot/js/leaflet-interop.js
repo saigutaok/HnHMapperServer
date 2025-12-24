@@ -431,6 +431,21 @@ export async function initializeMap(mapElementId, dotnetReference) {
         invokeDotNetSafe('JsOnMapChanged', e.mapId);
     });
 
+    // Expose a fast-path for applying tile updates.
+    //
+    // Why:
+    // - When the tab is backgrounded, browsers throttle timers/JS execution and can temporarily
+    //   stall networking callbacks. When the tab becomes visible again, the SSE stream may deliver
+    //   a burst of tile updates.
+    // - Historically we routed each tile update JS -> .NET -> JS (one interop call per tile).
+    //   With large bursts this creates long main-thread tasks and can freeze the UI for tens of seconds.
+    // - By exposing `applyTileUpdates` we allow the SSE module to update Leaflet directly (JS->JS)
+    //   and we batch/time-slice the work across frames to keep the UI responsive.
+    try {
+        window.hnhMapper = window.hnhMapper || {};
+        window.hnhMapper.applyTileUpdates = applyTileUpdates;
+    } catch { /* ignore - non-browser/unsupported environment */ }
+
     // Set initial view to zoom level 7 (max zoom, shows base tiles)
     // This will trigger the 'load' event immediately
     mapInstance.setView([0, 0], HnHMaxZoom);
@@ -783,63 +798,264 @@ window.fetchTileInfo = async function(url) {
     }
 };
 
-export function refreshTile(mapId, x, y, z, timestamp) {
+// -----------------------------------------------------------------------------
+// Tile update batching (SSE)
+// -----------------------------------------------------------------------------
+//
+// Tile updates may arrive in large bursts (e.g. when returning to a backgrounded tab).
+// Doing one JS interop call per tile (and doing heavy work per-tile) can easily create long
+// blocking tasks and freeze the UI.
+//
+// Strategy:
+// - Accept arrays of tile updates and enqueue them in JS.
+// - Deduplicate updates by tile cache key (keep the most recent timestamp).
+// - Process the queue in small batches spread across animation frames.
+// - Refresh only tiles that are currently visible; still update the cache for offscreen tiles.
+//
+// Note:
+// - This function is called from two places:
+//   1) `map-updates.js` (SSE client) directly via `window.hnhMapper.applyTileUpdates` (preferred)
+//   2) Blazor fallback via `MapView.ApplyTileUpdatesAsync` if the fast-path isn't available.
+const TILE_UPDATE_BATCH_SIZE = 400; // tuned to keep tasks <~16ms on typical hardware
+let pendingTileUpdateKeys = [];
+let pendingTileUpdateHead = 0; // "queue head" index (avoids Array.shift() which is O(n))
+let pendingTileUpdatesByKey = new Map(); // cacheKey -> { mapId, x, y, z, timestamp }
+let processingTileUpdateQueue = false;
+
+/**
+ * Normalize a raw tile update into a stable internal shape.
+ *
+ * We intentionally accept both camelCase and PascalCase property names because:
+ * - SSE JSON payloads are typically camelCase/lowercase
+ * - .NET JSInterop may serialize objects differently depending on options
+ *
+ * @param {any} raw
+ * @returns {{ mapId:number, x:number, y:number, z:number, timestamp:number } | null}
+ */
+function normalizeTileUpdate(raw) {
+    if (!raw) return null;
+
+    // Accept: { M, X, Y, Z, T } OR { m, x, y, z, t } OR any mixed-case variant.
+    const mapId = Number(raw.M ?? raw.m);
+    const x = Number(raw.X ?? raw.x);
+    const y = Number(raw.Y ?? raw.y);
+    const z = Number(raw.Z ?? raw.z);
+    const timestamp = Number(raw.T ?? raw.t);
+
+    // Validate aggressively; bad values can otherwise explode memory usage by creating unique keys.
+    if (!Number.isInteger(mapId) || mapId <= 0) return null;
+    if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z)) return null;
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+
+    return { mapId, x, y, z, timestamp };
+}
+
+/**
+ * Compute the currently visible tile range (expanded by 1 tile) for a layer.
+ *
+ * @param {any} layer - SmartTileLayer instance
+ * @returns {{ mapId:number, z:number, minX:number, maxX:number, minY:number, maxY:number } | null}
+ */
+function getVisibleTileRange(layer) {
+    if (!mapInstance || !layer || !layer._map) return null;
+    if (!layer.mapId || layer.mapId <= 0) return null;
+
+    // Convert Leaflet zoom to HnH zoom (reverse handling)
+    const leafletZoom = mapInstance.getZoom();
+    let hnhZ = leafletZoom;
+    if (layer.options?.zoomReverse) {
+        hnhZ = (layer.options.maxZoom ?? leafletZoom) - leafletZoom;
+    }
+
+    const range = layer._pxBoundsToTileRange(mapInstance.getPixelBounds());
+    return {
+        mapId: layer.mapId,
+        z: hnhZ,
+        minX: range.min.x - 1,
+        maxX: range.max.x + 1,
+        minY: range.min.y - 1,
+        maxY: range.max.y + 1
+    };
+}
+
+/**
+ * Apply a tile update to the shared cache, then refresh if that tile is visible.
+ *
+ * IMPORTANT PERFORMANCE NOTE:
+ * - This method is on a hot path. Keep it allocation-light and avoid O(n) operations.
+ * - In particular, NEVER use Array.shift() in a loop for eviction (O(n^2) worst-case).
+ *
+ * @param {{ mapId:number, x:number, y:number, z:number, timestamp:number }} update
+ * @param {any} mainVisible - output of getVisibleTileRange(mainLayer)
+ * @param {any} overlayVisible - output of getVisibleTileRange(overlayLayer)
+ */
+function applySingleTileUpdate(update, mainVisible, overlayVisible) {
+    if (!mainLayer) return;
+
+    const { mapId, x, y, z, timestamp } = update;
     const tileKey = `${x}:${y}:${z}`;
 
-    // Initialize per-map cache if needed
+    // Initialize per-map cache if needed.
+    // NOTE: SmartTileLayer defines `cache` on the prototype, so it's effectively shared
+    // across instances (main/overlay). We intentionally update it through mainLayer.
     if (!mainLayer.cache[mapId]) {
         mainLayer.cache[mapId] = {};
     }
 
-    // Store cache entry with etag (timestamp)
+    // Store cache entry with etag (timestamp).
+    // The server uses this to decide whether the client already has the newest tile.
     mainLayer.cache[mapId][tileKey] = { etag: timestamp };
 
-    // Track in cacheKeys for LRU eviction (total entries across all maps)
-    const fullCacheKey = `${mapId}:${tileKey}`;
-    mainLayer.cacheKeys.push({ mapId, tileKey });
+    // Track insertion order for bounded cache (simple LRU-ish behavior).
+    //
+    // We store `etag` in the queue entry so eviction won't delete a newer cache entry
+    // for the same tileKey (duplicates happen naturally when a tile is updated multiple times).
+    if (typeof mainLayer._cacheKeysHead !== 'number') {
+        mainLayer._cacheKeysHead = 0;
+    }
+    mainLayer.cacheKeys.push({ mapId, tileKey, etag: timestamp });
 
-    // Evict oldest entries if over limit
-    while (mainLayer.cacheKeys.length > mainLayer.maxCacheEntries) {
-        const oldest = mainLayer.cacheKeys.shift();
-        if (mainLayer.cache[oldest.mapId]) {
+    // Evict oldest entries if over limit (O(1) per eviction).
+    while ((mainLayer.cacheKeys.length - mainLayer._cacheKeysHead) > mainLayer.maxCacheEntries) {
+        const oldest = mainLayer.cacheKeys[mainLayer._cacheKeysHead++];
+        const current = mainLayer.cache?.[oldest.mapId]?.[oldest.tileKey];
+        if (current && current.etag === oldest.etag) {
             delete mainLayer.cache[oldest.mapId][oldest.tileKey];
         }
     }
 
-    let refreshedAny = false;
-
-    // Helper: check if a tile is currently within (slightly expanded) visible range for a given layer
-    function isTileVisible(layer, tileX, tileY, tileZ) {
-        if (!mapInstance || !layer || !layer._map) return false;
-        // Convert Leaflet zoom to HnH zoom (reverse handling)
-        let hnhZ = mapInstance.getZoom();
-        if (layer.options.zoomReverse) {
-            hnhZ = layer.options.maxZoom - hnhZ;
-        }
-        if (tileZ !== hnhZ) return false;
-        // Compute visible tile range and expand by 1 tile as a buffer
-        const range = layer._pxBoundsToTileRange(mapInstance.getPixelBounds());
-        const minX = range.min.x - 1;
-        const maxX = range.max.x + 1;
-        const minY = range.min.y - 1;
-        const maxY = range.max.y + 1;
-        return tileX >= minX && tileX <= maxX && tileY >= minY && tileY <= maxY;
+    // Periodically compact the queue to keep memory bounded (avoid unbounded growth).
+    if (mainLayer._cacheKeysHead > 1000 && mainLayer._cacheKeysHead > (mainLayer.cacheKeys.length / 2)) {
+        mainLayer.cacheKeys = mainLayer.cacheKeys.slice(mainLayer._cacheKeysHead);
+        mainLayer._cacheKeysHead = 0;
     }
 
-    // Refresh only if the tile is visible for the corresponding layer; otherwise skip
-    if (mainLayer && mainLayer.mapId === mapId) {
-        if (isTileVisible(mainLayer, x, y, z)) {
-            refreshedAny = mainLayer.refresh(x, y, z) || refreshedAny;
-        }
+    // Refresh only if the tile is visible for the corresponding layer; otherwise skip.
+    if (mainVisible &&
+        mainLayer.mapId === mapId &&
+        z === mainVisible.z &&
+        x >= mainVisible.minX && x <= mainVisible.maxX &&
+        y >= mainVisible.minY && y <= mainVisible.maxY) {
+        mainLayer.refresh(x, y, z);
     }
 
-    if (overlayLayer && overlayLayer.mapId === mapId) {
-        if (isTileVisible(overlayLayer, x, y, z)) {
-            refreshedAny = overlayLayer.refresh(x, y, z) || refreshedAny;
+    if (overlayLayer &&
+        overlayVisible &&
+        overlayLayer.mapId === mapId &&
+        z === overlayVisible.z &&
+        x >= overlayVisible.minX && x <= overlayVisible.maxX &&
+        y >= overlayVisible.minY && y <= overlayVisible.maxY) {
+        overlayLayer.refresh(x, y, z);
+    }
+}
+
+/**
+ * Enqueue a list of tile updates and schedule frame-sliced processing.
+ *
+ * @param {any[]} tileUpdates
+ */
+function enqueueTileUpdates(tileUpdates) {
+    if (!tileUpdates || !Array.isArray(tileUpdates) || tileUpdates.length === 0) return;
+
+    for (const raw of tileUpdates) {
+        const update = normalizeTileUpdate(raw);
+        if (!update) continue;
+
+        const cacheKey = `${update.mapId}:${update.x}:${update.y}:${update.z}`;
+        if (!pendingTileUpdatesByKey.has(cacheKey)) {
+            pendingTileUpdateKeys.push(cacheKey);
         }
+        pendingTileUpdatesByKey.set(cacheKey, update);
+    }
+}
+
+/**
+ * Process the pending tile update queue in small batches.
+ * This keeps the UI responsive even during huge update bursts.
+ */
+function processTileUpdateBatch() {
+    // If the map isn't ready yet, don't drop pending updates—try again shortly.
+    if (!mapInstance || !mainLayer) {
+        processingTileUpdateQueue = false;
+        setTimeout(() => {
+            if (!processingTileUpdateQueue && pendingTileUpdatesByKey.size > 0) {
+                processingTileUpdateQueue = true;
+                requestAnimationFrame(processTileUpdateBatch);
+            }
+        }, 250);
+        return;
     }
 
-    // Do not force redraw for offscreen updates; let visible tiles update smoothly
+    const mainVisible = getVisibleTileRange(mainLayer);
+    const overlayVisible = getVisibleTileRange(overlayLayer);
+
+    const end = Math.min(pendingTileUpdateHead + TILE_UPDATE_BATCH_SIZE, pendingTileUpdateKeys.length);
+    for (let i = pendingTileUpdateHead; i < end; i++) {
+        const key = pendingTileUpdateKeys[i];
+        const update = pendingTileUpdatesByKey.get(key);
+        if (!update) continue;
+
+        pendingTileUpdatesByKey.delete(key);
+        applySingleTileUpdate(update, mainVisible, overlayVisible);
+    }
+
+    pendingTileUpdateHead = end;
+
+    // Compact the key queue occasionally to keep memory bounded (avoid unbounded growth).
+    if (pendingTileUpdateHead > 2000 && pendingTileUpdateHead > (pendingTileUpdateKeys.length / 2)) {
+        pendingTileUpdateKeys = pendingTileUpdateKeys.slice(pendingTileUpdateHead);
+        pendingTileUpdateHead = 0;
+    }
+
+    // More work to do → schedule next frame.
+    if (pendingTileUpdateHead < pendingTileUpdateKeys.length) {
+        requestAnimationFrame(processTileUpdateBatch);
+        return;
+    }
+
+    // Done → reset queue state.
+    pendingTileUpdateKeys = [];
+    pendingTileUpdateHead = 0;
+    pendingTileUpdatesByKey.clear();
+    processingTileUpdateQueue = false;
+}
+
+/**
+ * Apply a batch of tile updates (preferred entry point).
+ *
+ * This method:
+ * - deduplicates updates by tile key
+ * - processes them across frames
+ *
+ * @param {any[]} tileUpdates - array of tile update objects
+ * @returns {boolean} - true if accepted
+ */
+export function applyTileUpdates(tileUpdates) {
+    enqueueTileUpdates(tileUpdates);
+
+    if (!processingTileUpdateQueue && pendingTileUpdatesByKey.size > 0) {
+        processingTileUpdateQueue = true;
+        requestAnimationFrame(processTileUpdateBatch);
+    }
+
+    return true;
+}
+
+export function refreshTile(mapId, x, y, z, timestamp) {
+    // Single-tile API kept for backwards compatibility.
+    //
+    // NOTE: We still run through the shared cache/LRU logic (without Array.shift()) to avoid
+    // long blocking tasks when this function is called many times in quick succession.
+    if (!mainLayer) return false;
+
+    const mainVisible = getVisibleTileRange(mainLayer);
+    const overlayVisible = getVisibleTileRange(overlayLayer);
+    applySingleTileUpdate(
+        normalizeTileUpdate({ m: mapId, x, y, z, t: timestamp }) ?? { mapId, x, y, z, timestamp },
+        mainVisible,
+        overlayVisible
+    );
+
     return true;
 }
 

@@ -259,6 +259,21 @@
         await SafeJs.InvokeVoidSafeAsync(jsModule, "refreshTile", mapId, x, y, z, timestamp);
     }
 
+    public async Task ApplyTileUpdatesAsync(IReadOnlyList<TileUpdate> updates)
+    {
+        // IMPORTANT:
+        // Tile update bursts can be very large (especially when the browser tab was backgrounded).
+        // Sending one JS interop call per tile creates long tasks on the browser main thread and can
+        // completely freeze the UI for tens of seconds.
+        //
+        // We therefore forward the whole batch to JS once; the JS side deduplicates and time-slices
+        // processing across frames (see `leaflet-interop.js` -> applyTileUpdates()).
+        if (!initialized || jsModule == null || disposed) return;
+        if (updates == null || updates.Count == 0) return;
+
+        await SafeJs.InvokeVoidSafeAsync(jsModule, "applyTileUpdates", updates);
+    }
+
     public async Task JumpToCharacterAsync(int characterId)
     {
         if (!initialized || jsModule == null || disposed) return;
