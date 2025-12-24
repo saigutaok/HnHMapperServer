@@ -470,8 +470,8 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
             // No delay needed - this is called from HandleMapInitialized after Leaflet 'load' event
             // The map is guaranteed to be ready at this point (event-driven architecture)
 
-            // Load markers for current map (only if markers layer is enabled)
-            if (LayerVisibility.ShowMarkers)
+            // Load markers for current map (only if markers layer is enabled or marker filter mode is on)
+            if (LayerVisibility.ShowMarkers || showMarkerFilterMode)
             {
                 var markersToLoad = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
 
@@ -2692,6 +2692,15 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         if (success)
         {
             showMarkerFilterMode = newState;
+
+            // If enabling filter mode and markers aren't shown, load them so there's something to filter
+            if (newState && !LayerVisibility.ShowMarkers && mapView != null)
+            {
+                var markersToLoad = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+                EnrichMarkersWithTimerData(markersToLoad);
+                await mapView.AddMarkersAsync(markersToLoad);
+            }
+
             await SaveToggleStatesAsync();
             await InvokeAsync(StateHasChanged);
         }
