@@ -411,17 +411,9 @@ export async function initializeMap(mapElementId, dotnetReference) {
     mapInstance.on('moveend', () => {
         if (mainLayer) {
             mainLayer.clearVisibleNegativeCache();
-            // Force tile pruning to release memory from tiles outside viewport
-            // Critical for large maps (300k tiles) to prevent GB memory accumulation
-            if (mainLayer._pruneTiles) {
-                mainLayer._pruneTiles();
-            }
         }
         if (overlayLayer && overlayLayer.mapId > 0) {
             overlayLayer.clearVisibleNegativeCache();
-            if (overlayLayer._pruneTiles) {
-                overlayLayer._pruneTiles();
-            }
         }
     });
 
@@ -647,11 +639,7 @@ export function changeMap(mapId) {
         });
     }
 
-    // Force tile cleanup and reload - this releases the old tile DOM elements from memory
-    // Without this, _tiles accumulates across map switches (each tile = ~400KB decoded)
-    if (mainLayer._removeAllTiles) {
-        mainLayer._removeAllTiles();
-    }
+    // Reload tiles for new map
     mainLayer.redraw();
 
     // Also invalidate size to trigger full reload
@@ -1032,9 +1020,6 @@ export function setClusteringEnabled(enabled) {
     // Update the manager references
     MarkerManager.setMarkerLayers(markerLayer, detailedMarkerLayer);
     CustomMarkerManager.initializeCustomMarkerManager(customMarkerLayer, invokeDotNetSafe);
-
-    // Re-apply filter visibility (CSS styles were lost when markers moved between layers)
-    MarkerManager.refreshMarkerVisibility(mapInstance);
 
     console.log('[Leaflet] Clustering', enabled ? 'enabled' : 'disabled',
         '- moved', markersList.length, 'game markers and', customMarkersList.length, 'custom markers');
