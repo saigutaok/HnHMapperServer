@@ -170,7 +170,7 @@ export async function initializeMap(mapElementId, dotnetReference) {
         errorTileUrl: '',          // Don't show any image for missing/error tiles
         updateWhenIdle: false,     // Load tiles during zoom animation for smoother transitions (changed from true)
         updateWhenZooming: true,   // Continue updating tiles during zoom animation (NEW)
-        keepBuffer: 1,             // Keep 1 tile buffer around viewport (reduced from 3 for memory savings)
+        keepBuffer: 2,             // Keep 2 tile buffer around viewport (balance between memory and smooth zoom)
         updateInterval: 100,       // Throttle tile updates during continuous pan (ms) - faster for snappier response
         noWrap: true              // Don't wrap tiles at world edges (Haven map is finite)
     });
@@ -303,8 +303,9 @@ export async function initializeMap(mapElementId, dotnetReference) {
             }
         }
 
-        // IMMEDIATE: Update overlay layer - force redraw since tile offset depends on zoom
-        if (overlayLayer && overlayLayer.mapId > 0) {
+        // IMMEDIATE: Update overlay layer - only redraw if offset is non-zero (comparison mode)
+        // Skip redraw when offset is 0 to avoid unnecessary tile reload on every zoom
+        if (overlayLayer && overlayLayer.mapId > 0 && (overlayLayer.offsetX !== 0 || overlayLayer.offsetY !== 0)) {
             // Clear any CSS transform - offset is handled purely through tile coordinates
             const container = overlayLayer.getContainer();
             if (container) {
@@ -473,9 +474,9 @@ function prefetchNextZoomTiles() {
         const nextZoomMinY = prefetchRange.minY * 2;
         const nextZoomMaxY = prefetchRange.maxY * 2 + 1;
 
-        // Limit prefetch to avoid overwhelming the browser (max 50 tiles per zoom level)
+        // Limit prefetch to avoid overwhelming the browser (max 20 tiles per zoom level)
         let prefetchCount = 0;
-        const maxPrefetch = 50;
+        const maxPrefetch = 20;
 
         for (let x = nextZoomMinX; x <= nextZoomMaxX && prefetchCount < maxPrefetch; x++) {
             for (let y = nextZoomMinY; y <= nextZoomMaxY && prefetchCount < maxPrefetch; y++) {
@@ -532,7 +533,7 @@ function prefetchNextZoomTiles() {
         const prevZoomMaxY = Math.floor(prefetchRange.maxY / 2);
 
         let prefetchCount = 0;
-        const maxPrefetch = 25; // Fewer tiles needed for zoom out
+        const maxPrefetch = 10; // Fewer tiles needed for zoom out
 
         for (let x = prevZoomMinX; x <= prevZoomMaxX && prefetchCount < maxPrefetch; x++) {
             for (let y = prevZoomMinY; y <= prevZoomMaxY && prefetchCount < maxPrefetch; y++) {
@@ -673,7 +674,7 @@ export function setOverlayMap(mapId, offsetX = 0, offsetY = 0) {
             errorTileUrl: '',          // Don't show any image for missing/error tiles
             updateWhenIdle: false,     // Load tiles during zoom animation for smoother transitions (changed from true)
             updateWhenZooming: true,   // Continue updating tiles during zoom animation (NEW)
-            keepBuffer: 1,             // Keep 1 tile buffer around viewport (reduced from 3 for memory savings)
+            keepBuffer: 2,             // Keep 2 tile buffer around viewport (balance between memory and smooth zoom)
             updateInterval: 100,       // Throttle tile updates during continuous pan (ms) - faster for snappier response
             noWrap: true              // Don't wrap tiles at world edges (Haven map is finite)
         });
