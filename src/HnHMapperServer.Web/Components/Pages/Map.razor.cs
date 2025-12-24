@@ -2102,11 +2102,15 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
         await mapView.ClearAllMarkersAsync();
 
-        var markers = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
-        EnrichMarkersWithTimerData(markers);
+        // Only add markers if they should be visible
+        if (LayerVisibility.ShowMarkers || showMarkerFilterMode)
+        {
+            var markers = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+            EnrichMarkersWithTimerData(markers);
 
-        // Batch add all markers in a single JS interop call for performance
-        await mapView.AddMarkersAsync(markers);
+            // Batch add all markers in a single JS interop call for performance
+            await mapView.AddMarkersAsync(markers);
+        }
     }
 
     /// <summary>
