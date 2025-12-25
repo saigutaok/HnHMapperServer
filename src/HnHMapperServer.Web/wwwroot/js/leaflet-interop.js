@@ -50,6 +50,13 @@ let customMarkerLayer = null;
 let roadLayer = null;
 let currentMapId = 0;
 
+// Clustering state - create both regular and cluster layers, swap between them
+let markerClusterLayer = null;
+let markerRegularLayer = null;
+let customMarkerClusterLayer = null;
+let customMarkerRegularLayer = null;
+let clusteringEnabled = true;
+
 // Debounce timer for zoom operations to reduce excessive tile requests during rapid zoom
 let zoomDebounceTimer = null;
 const ZOOM_DEBOUNCE_MS = 1500; // 1.5 seconds
@@ -139,8 +146,8 @@ export async function initializeMap(mapElementId, dotnetReference) {
                     attributionControl: false,
                     inertia: false,
                     zoomAnimation: true,        // Enable smooth zoom transitions
-                    fadeAnimation: true,         // Re-enable tile fade (we'll avoid black with placeholders)
-                    markerZoomAnimation: true    // Enable marker zoom animations
+                    fadeAnimation: false,        // Disabled for performance (no tile fade = less repaints)
+                    markerZoomAnimation: false   // Disabled for performance (no marker animations during zoom)
                 });
 
                 console.log('[Leaflet] Map instance created successfully');
@@ -161,9 +168,9 @@ export async function initializeMap(mapElementId, dotnetReference) {
         zoomReverse: true,
         tileSize: TileSize,
         errorTileUrl: '',          // Don't show any image for missing/error tiles
-        updateWhenIdle: false,     // Load tiles during zoom animation for smoother transitions (changed from true)
-        updateWhenZooming: true,   // Continue updating tiles during zoom animation (NEW)
-        keepBuffer: 3,             // Keep 3 tile buffer around viewport for smoother zoom/pan (increased from 2)
+        updateWhenIdle: true,      // Only load tiles when zoom/pan stops (better performance)
+        updateWhenZooming: false,  // DON'T load tiles during zoom animation (prevents 100+ requests per zoom)
+        keepBuffer: 1,             // Reduced from 2 to 1 for large maps (300k tiles) - saves ~50% tile memory
         updateInterval: 100,       // Throttle tile updates during continuous pan (ms) - faster for snappier response
         noWrap: true              // Don't wrap tiles at world edges (Haven map is finite)
     });
@@ -193,10 +200,35 @@ export async function initializeMap(mapElementId, dotnetReference) {
     coordLayer = new L.GridLayer.GridCoord({ tileSize: TileSize, opacity: 0 });
     coordLayer.addTo(mapInstance);
 
-    // Marker layers
-    markerLayer = L.layerGroup().addTo(mapInstance);
+    // Marker layers - create both clustered and regular versions
+    // Cluster layers for game markers (default enabled for performance)
+    markerClusterLayer = L.markerClusterGroup({
+        maxClusterRadius: 60,
+        disableClusteringAtZoom: 6,
+        spiderfyOnMaxZoom: true,
+        chunkedLoading: true,
+        animate: false  // Disabled for performance (no cluster animations during zoom)
+    });
+    markerRegularLayer = L.layerGroup();
+
+    // Cluster layers for custom markers
+    customMarkerClusterLayer = L.markerClusterGroup({
+        maxClusterRadius: 60,
+        disableClusteringAtZoom: 6,
+        chunkedLoading: true,
+        animate: false  // Disabled for performance (no cluster animations during zoom)
+    });
+    customMarkerRegularLayer = L.layerGroup();
+
+    // Start with clustering enabled by default
+    clusteringEnabled = true;
+    markerLayer = markerClusterLayer;
+    customMarkerLayer = customMarkerClusterLayer;
+    markerLayer.addTo(mapInstance);
+    customMarkerLayer.addTo(mapInstance);
+
+    // Detailed marker layer stays as regular group (caves only at high zoom)
     detailedMarkerLayer = L.layerGroup().addTo(mapInstance);
-    customMarkerLayer = L.layerGroup().addTo(mapInstance);
     roadLayer = L.layerGroup().addTo(mapInstance);
 
     // Initialize managers
@@ -243,7 +275,9 @@ export async function initializeMap(mapElementId, dotnetReference) {
     });
 
     // Event handlers
-    mapInstance.on('drag', () => {
+    // Use 'dragend' instead of 'drag' to avoid triggering Blazor render cycles during pan
+    // This matches how zoom uses 'zoomend' - URL only updates when movement stops
+    mapInstance.on('dragend', () => {
         const point = mapInstance.project(mapInstance.getCenter(), mapInstance.getZoom());
         const coords = {
             x: Math.floor(point.x / TileSize),
@@ -269,8 +303,9 @@ export async function initializeMap(mapElementId, dotnetReference) {
             }
         }
 
-        // IMMEDIATE: Update overlay layer - force redraw since tile offset depends on zoom
-        if (overlayLayer && overlayLayer.mapId > 0) {
+        // IMMEDIATE: Update overlay layer - only redraw if offset is non-zero (comparison mode)
+        // Skip redraw when offset is 0 to avoid unnecessary tile reload on every zoom
+        if (overlayLayer && overlayLayer.mapId > 0 && (overlayLayer.offsetX !== 0 || overlayLayer.offsetY !== 0)) {
             // Clear any CSS transform - offset is handled purely through tile coordinates
             const container = overlayLayer.getContainer();
             if (container) {
@@ -396,6 +431,21 @@ export async function initializeMap(mapElementId, dotnetReference) {
         invokeDotNetSafe('JsOnMapChanged', e.mapId);
     });
 
+    // Expose a fast-path for applying tile updates.
+    //
+    // Why:
+    // - When the tab is backgrounded, browsers throttle timers/JS execution and can temporarily
+    //   stall networking callbacks. When the tab becomes visible again, the SSE stream may deliver
+    //   a burst of tile updates.
+    // - Historically we routed each tile update JS -> .NET -> JS (one interop call per tile).
+    //   With large bursts this creates long main-thread tasks and can freeze the UI for tens of seconds.
+    // - By exposing `applyTileUpdates` we allow the SSE module to update Leaflet directly (JS->JS)
+    //   and we batch/time-slice the work across frames to keep the UI responsive.
+    try {
+        window.hnhMapper = window.hnhMapper || {};
+        window.hnhMapper.applyTileUpdates = applyTileUpdates;
+    } catch { /* ignore - non-browser/unsupported environment */ }
+
     // Set initial view to zoom level 7 (max zoom, shows base tiles)
     // This will trigger the 'load' event immediately
     mapInstance.setView([0, 0], HnHMaxZoom);
@@ -439,9 +489,10 @@ function prefetchNextZoomTiles() {
         const nextZoomMinY = prefetchRange.minY * 2;
         const nextZoomMaxY = prefetchRange.maxY * 2 + 1;
 
-        // Limit prefetch to avoid overwhelming the browser (max 50 tiles per zoom level)
+        // Limit prefetch to reduce CPU/memory overhead on large maps (300k+ tiles)
+        // Browser cache handles most tiles, so fewer prefetches still maintain snappiness
         let prefetchCount = 0;
-        const maxPrefetch = 50;
+        const maxPrefetch = 10;
 
         for (let x = nextZoomMinX; x <= nextZoomMaxX && prefetchCount < maxPrefetch; x++) {
             for (let y = nextZoomMinY; y <= nextZoomMaxY && prefetchCount < maxPrefetch; y++) {
@@ -468,7 +519,12 @@ function prefetchNextZoomTiles() {
                 const tileUrl = `/map/grids/${mainLayer.mapId}/${hnhZoom}/${x}_${y}.png?v=${revision}`;
 
                 // Prefetch using Image() - this warms the browser cache
+                // Clean up after load/error to prevent memory leak
                 const prefetchImg = new Image();
+                prefetchImg.onload = prefetchImg.onerror = function() {
+                    this.onload = this.onerror = null;
+                    this.src = '';
+                };
                 prefetchImg.src = tileUrl;
 
                 prefetchCount++;
@@ -493,7 +549,7 @@ function prefetchNextZoomTiles() {
         const prevZoomMaxY = Math.floor(prefetchRange.maxY / 2);
 
         let prefetchCount = 0;
-        const maxPrefetch = 25; // Fewer tiles needed for zoom out
+        const maxPrefetch = 5; // Minimal prefetch for large maps - browser cache handles the rest
 
         for (let x = prevZoomMinX; x <= prevZoomMaxX && prefetchCount < maxPrefetch; x++) {
             for (let y = prevZoomMinY; y <= prevZoomMaxY && prefetchCount < maxPrefetch; y++) {
@@ -519,8 +575,12 @@ function prefetchNextZoomTiles() {
                 // Build URL for prefetch
                 const tileUrl = `/map/grids/${mainLayer.mapId}/${hnhZoom}/${x}_${y}.png?v=${revision}`;
 
-                // Prefetch using Image()
+                // Prefetch using Image() - clean up after load/error to prevent memory leak
                 const prefetchImg = new Image();
+                prefetchImg.onload = prefetchImg.onerror = function() {
+                    this.onload = this.onerror = null;
+                    this.src = '';
+                };
                 prefetchImg.src = tileUrl;
 
                 prefetchCount++;
@@ -574,7 +634,27 @@ export function changeMap(mapId) {
     }
     keysToDelete.forEach(key => delete mainLayer.negativeCache[key]);
 
-    // Force tile reload by invalidating the layer
+    // Memory cleanup: Clear tileStates for other maps (they're stale)
+    const tileStateKeys = Object.keys(mainLayer.tileStates);
+    tileStateKeys.forEach(key => {
+        if (!key.startsWith(`${mapId}:`)) {
+            delete mainLayer.tileStates[key];
+        }
+    });
+
+    // Memory cleanup: Limit number of cached maps to 3 most recent
+    const MAX_CACHED_MAPS = 3;
+    const cachedMapIds = Object.keys(mainLayer.cache).map(Number).filter(id => id !== mapId);
+    if (cachedMapIds.length >= MAX_CACHED_MAPS) {
+        // Remove oldest cached maps (keep only most recent ones)
+        const mapsToRemove = cachedMapIds.slice(0, cachedMapIds.length - MAX_CACHED_MAPS + 1);
+        mapsToRemove.forEach(oldMapId => {
+            delete mainLayer.cache[oldMapId];
+            console.debug('[changeMap] Evicted cache for map', oldMapId);
+        });
+    }
+
+    // Reload tiles for new map
     mainLayer.redraw();
 
     // Also invalidate size to trigger full reload
@@ -608,9 +688,9 @@ export function setOverlayMap(mapId, offsetX = 0, offsetY = 0) {
             tileSize: TileSize,
             opacity: 0.6,
             errorTileUrl: '',          // Don't show any image for missing/error tiles
-            updateWhenIdle: false,     // Load tiles during zoom animation for smoother transitions (changed from true)
-            updateWhenZooming: true,   // Continue updating tiles during zoom animation (NEW)
-            keepBuffer: 3,             // Keep 3 tile buffer around viewport for smoother zoom/pan (increased from 2)
+            updateWhenIdle: true,      // Only load tiles when zoom/pan stops (better performance)
+            updateWhenZooming: false,  // DON'T load tiles during zoom animation (prevents 100+ requests per zoom)
+            keepBuffer: 1,             // Reduced from 2 to 1 for large maps (300k tiles) - saves ~50% tile memory
             updateInterval: 100,       // Throttle tile updates during continuous pan (ms) - faster for snappier response
             noWrap: true              // Don't wrap tiles at world edges (Haven map is finite)
         });
@@ -689,51 +769,293 @@ export function toggleGridCoordinates(visible) {
     return true;
 }
 
-export function refreshTile(mapId, x, y, z, timestamp) {
+export function refreshTiles() {
+    if (mainLayer) {
+        // Clear negative cache and redraw
+        mainLayer.negativeCache = {};
+        mainLayer.redraw();
+    }
+    if (overlayLayer && overlayLayer.mapId > 0) {
+        overlayLayer.negativeCache = {};
+        overlayLayer.redraw();
+    }
+    return true;
+}
+
+// Fetch tile info from the Web service endpoint (used by Blazor JS interop)
+window.fetchTileInfo = async function(url) {
+    try {
+        const response = await fetch(url, {
+            credentials: 'include'  // Include authentication cookie
+        });
+        if (!response.ok) {
+            return null;
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching tile info:', error);
+        return null;
+    }
+};
+
+// -----------------------------------------------------------------------------
+// Tile update batching (SSE)
+// -----------------------------------------------------------------------------
+//
+// Tile updates may arrive in large bursts (e.g. when returning to a backgrounded tab).
+// Doing one JS interop call per tile (and doing heavy work per-tile) can easily create long
+// blocking tasks and freeze the UI.
+//
+// Strategy:
+// - Accept arrays of tile updates and enqueue them in JS.
+// - Deduplicate updates by tile cache key (keep the most recent timestamp).
+// - Process the queue in small batches spread across animation frames.
+// - Refresh only tiles that are currently visible; still update the cache for offscreen tiles.
+//
+// Note:
+// - This function is called from two places:
+//   1) `map-updates.js` (SSE client) directly via `window.hnhMapper.applyTileUpdates` (preferred)
+//   2) Blazor fallback via `MapView.ApplyTileUpdatesAsync` if the fast-path isn't available.
+const TILE_UPDATE_BATCH_SIZE = 400; // tuned to keep tasks <~16ms on typical hardware
+let pendingTileUpdateKeys = [];
+let pendingTileUpdateHead = 0; // "queue head" index (avoids Array.shift() which is O(n))
+let pendingTileUpdatesByKey = new Map(); // cacheKey -> { mapId, x, y, z, timestamp }
+let processingTileUpdateQueue = false;
+
+/**
+ * Normalize a raw tile update into a stable internal shape.
+ *
+ * We intentionally accept both camelCase and PascalCase property names because:
+ * - SSE JSON payloads are typically camelCase/lowercase
+ * - .NET JSInterop may serialize objects differently depending on options
+ *
+ * @param {any} raw
+ * @returns {{ mapId:number, x:number, y:number, z:number, timestamp:number } | null}
+ */
+function normalizeTileUpdate(raw) {
+    if (!raw) return null;
+
+    // Accept: { M, X, Y, Z, T } OR { m, x, y, z, t } OR any mixed-case variant.
+    const mapId = Number(raw.M ?? raw.m);
+    const x = Number(raw.X ?? raw.x);
+    const y = Number(raw.Y ?? raw.y);
+    const z = Number(raw.Z ?? raw.z);
+    const timestamp = Number(raw.T ?? raw.t);
+
+    // Validate aggressively; bad values can otherwise explode memory usage by creating unique keys.
+    if (!Number.isInteger(mapId) || mapId <= 0) return null;
+    if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z)) return null;
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+
+    return { mapId, x, y, z, timestamp };
+}
+
+/**
+ * Compute the currently visible tile range (expanded by 1 tile) for a layer.
+ *
+ * @param {any} layer - SmartTileLayer instance
+ * @returns {{ mapId:number, z:number, minX:number, maxX:number, minY:number, maxY:number } | null}
+ */
+function getVisibleTileRange(layer) {
+    if (!mapInstance || !layer || !layer._map) return null;
+    if (!layer.mapId || layer.mapId <= 0) return null;
+
+    // Convert Leaflet zoom to HnH zoom (reverse handling)
+    const leafletZoom = mapInstance.getZoom();
+    let hnhZ = leafletZoom;
+    if (layer.options?.zoomReverse) {
+        hnhZ = (layer.options.maxZoom ?? leafletZoom) - leafletZoom;
+    }
+
+    const range = layer._pxBoundsToTileRange(mapInstance.getPixelBounds());
+    return {
+        mapId: layer.mapId,
+        z: hnhZ,
+        minX: range.min.x - 1,
+        maxX: range.max.x + 1,
+        minY: range.min.y - 1,
+        maxY: range.max.y + 1
+    };
+}
+
+/**
+ * Apply a tile update to the shared cache, then refresh if that tile is visible.
+ *
+ * IMPORTANT PERFORMANCE NOTE:
+ * - This method is on a hot path. Keep it allocation-light and avoid O(n) operations.
+ * - In particular, NEVER use Array.shift() in a loop for eviction (O(n^2) worst-case).
+ *
+ * @param {{ mapId:number, x:number, y:number, z:number, timestamp:number }} update
+ * @param {any} mainVisible - output of getVisibleTileRange(mainLayer)
+ * @param {any} overlayVisible - output of getVisibleTileRange(overlayLayer)
+ */
+function applySingleTileUpdate(update, mainVisible, overlayVisible) {
+    if (!mainLayer) return;
+
+    const { mapId, x, y, z, timestamp } = update;
     const tileKey = `${x}:${y}:${z}`;
 
-    // Initialize per-map cache if needed
+    // Initialize per-map cache if needed.
+    // NOTE: SmartTileLayer defines `cache` on the prototype, so it's effectively shared
+    // across instances (main/overlay). We intentionally update it through mainLayer.
     if (!mainLayer.cache[mapId]) {
         mainLayer.cache[mapId] = {};
     }
 
-    // Store cache entry with etag (timestamp)
+    // Store cache entry with etag (timestamp).
+    // The server uses this to decide whether the client already has the newest tile.
     mainLayer.cache[mapId][tileKey] = { etag: timestamp };
 
-    let refreshedAny = false;
-
-    // Helper: check if a tile is currently within (slightly expanded) visible range for a given layer
-    function isTileVisible(layer, tileX, tileY, tileZ) {
-        if (!mapInstance || !layer || !layer._map) return false;
-        // Convert Leaflet zoom to HnH zoom (reverse handling)
-        let hnhZ = mapInstance.getZoom();
-        if (layer.options.zoomReverse) {
-            hnhZ = layer.options.maxZoom - hnhZ;
-        }
-        if (tileZ !== hnhZ) return false;
-        // Compute visible tile range and expand by 1 tile as a buffer
-        const range = layer._pxBoundsToTileRange(mapInstance.getPixelBounds());
-        const minX = range.min.x - 1;
-        const maxX = range.max.x + 1;
-        const minY = range.min.y - 1;
-        const maxY = range.max.y + 1;
-        return tileX >= minX && tileX <= maxX && tileY >= minY && tileY <= maxY;
+    // Track insertion order for bounded cache (simple LRU-ish behavior).
+    //
+    // We store `etag` in the queue entry so eviction won't delete a newer cache entry
+    // for the same tileKey (duplicates happen naturally when a tile is updated multiple times).
+    if (typeof mainLayer._cacheKeysHead !== 'number') {
+        mainLayer._cacheKeysHead = 0;
     }
+    mainLayer.cacheKeys.push({ mapId, tileKey, etag: timestamp });
 
-    // Refresh only if the tile is visible for the corresponding layer; otherwise skip
-    if (mainLayer && mainLayer.mapId === mapId) {
-        if (isTileVisible(mainLayer, x, y, z)) {
-            refreshedAny = mainLayer.refresh(x, y, z) || refreshedAny;
+    // Evict oldest entries if over limit (O(1) per eviction).
+    while ((mainLayer.cacheKeys.length - mainLayer._cacheKeysHead) > mainLayer.maxCacheEntries) {
+        const oldest = mainLayer.cacheKeys[mainLayer._cacheKeysHead++];
+        const current = mainLayer.cache?.[oldest.mapId]?.[oldest.tileKey];
+        if (current && current.etag === oldest.etag) {
+            delete mainLayer.cache[oldest.mapId][oldest.tileKey];
         }
     }
 
-    if (overlayLayer && overlayLayer.mapId === mapId) {
-        if (isTileVisible(overlayLayer, x, y, z)) {
-            refreshedAny = overlayLayer.refresh(x, y, z) || refreshedAny;
-        }
+    // Periodically compact the queue to keep memory bounded (avoid unbounded growth).
+    if (mainLayer._cacheKeysHead > 1000 && mainLayer._cacheKeysHead > (mainLayer.cacheKeys.length / 2)) {
+        mainLayer.cacheKeys = mainLayer.cacheKeys.slice(mainLayer._cacheKeysHead);
+        mainLayer._cacheKeysHead = 0;
     }
 
-    // Do not force redraw for offscreen updates; let visible tiles update smoothly
+    // Refresh only if the tile is visible for the corresponding layer; otherwise skip.
+    if (mainVisible &&
+        mainLayer.mapId === mapId &&
+        z === mainVisible.z &&
+        x >= mainVisible.minX && x <= mainVisible.maxX &&
+        y >= mainVisible.minY && y <= mainVisible.maxY) {
+        mainLayer.refresh(x, y, z);
+    }
+
+    if (overlayLayer &&
+        overlayVisible &&
+        overlayLayer.mapId === mapId &&
+        z === overlayVisible.z &&
+        x >= overlayVisible.minX && x <= overlayVisible.maxX &&
+        y >= overlayVisible.minY && y <= overlayVisible.maxY) {
+        overlayLayer.refresh(x, y, z);
+    }
+}
+
+/**
+ * Enqueue a list of tile updates and schedule frame-sliced processing.
+ *
+ * @param {any[]} tileUpdates
+ */
+function enqueueTileUpdates(tileUpdates) {
+    if (!tileUpdates || !Array.isArray(tileUpdates) || tileUpdates.length === 0) return;
+
+    for (const raw of tileUpdates) {
+        const update = normalizeTileUpdate(raw);
+        if (!update) continue;
+
+        const cacheKey = `${update.mapId}:${update.x}:${update.y}:${update.z}`;
+        if (!pendingTileUpdatesByKey.has(cacheKey)) {
+            pendingTileUpdateKeys.push(cacheKey);
+        }
+        pendingTileUpdatesByKey.set(cacheKey, update);
+    }
+}
+
+/**
+ * Process the pending tile update queue in small batches.
+ * This keeps the UI responsive even during huge update bursts.
+ */
+function processTileUpdateBatch() {
+    // If the map isn't ready yet, don't drop pending updates—try again shortly.
+    if (!mapInstance || !mainLayer) {
+        processingTileUpdateQueue = false;
+        setTimeout(() => {
+            if (!processingTileUpdateQueue && pendingTileUpdatesByKey.size > 0) {
+                processingTileUpdateQueue = true;
+                requestAnimationFrame(processTileUpdateBatch);
+            }
+        }, 250);
+        return;
+    }
+
+    const mainVisible = getVisibleTileRange(mainLayer);
+    const overlayVisible = getVisibleTileRange(overlayLayer);
+
+    const end = Math.min(pendingTileUpdateHead + TILE_UPDATE_BATCH_SIZE, pendingTileUpdateKeys.length);
+    for (let i = pendingTileUpdateHead; i < end; i++) {
+        const key = pendingTileUpdateKeys[i];
+        const update = pendingTileUpdatesByKey.get(key);
+        if (!update) continue;
+
+        pendingTileUpdatesByKey.delete(key);
+        applySingleTileUpdate(update, mainVisible, overlayVisible);
+    }
+
+    pendingTileUpdateHead = end;
+
+    // Compact the key queue occasionally to keep memory bounded (avoid unbounded growth).
+    if (pendingTileUpdateHead > 2000 && pendingTileUpdateHead > (pendingTileUpdateKeys.length / 2)) {
+        pendingTileUpdateKeys = pendingTileUpdateKeys.slice(pendingTileUpdateHead);
+        pendingTileUpdateHead = 0;
+    }
+
+    // More work to do → schedule next frame.
+    if (pendingTileUpdateHead < pendingTileUpdateKeys.length) {
+        requestAnimationFrame(processTileUpdateBatch);
+        return;
+    }
+
+    // Done → reset queue state.
+    pendingTileUpdateKeys = [];
+    pendingTileUpdateHead = 0;
+    pendingTileUpdatesByKey.clear();
+    processingTileUpdateQueue = false;
+}
+
+/**
+ * Apply a batch of tile updates (preferred entry point).
+ *
+ * This method:
+ * - deduplicates updates by tile key
+ * - processes them across frames
+ *
+ * @param {any[]} tileUpdates - array of tile update objects
+ * @returns {boolean} - true if accepted
+ */
+export function applyTileUpdates(tileUpdates) {
+    enqueueTileUpdates(tileUpdates);
+
+    if (!processingTileUpdateQueue && pendingTileUpdatesByKey.size > 0) {
+        processingTileUpdateQueue = true;
+        requestAnimationFrame(processTileUpdateBatch);
+    }
+
+    return true;
+}
+
+export function refreshTile(mapId, x, y, z, timestamp) {
+    // Single-tile API kept for backwards compatibility.
+    //
+    // NOTE: We still run through the shared cache/LRU logic (without Array.shift()) to avoid
+    // long blocking tasks when this function is called many times in quick succession.
+    if (!mainLayer) return false;
+
+    const mainVisible = getVisibleTileRange(mainLayer);
+    const overlayVisible = getVisibleTileRange(overlayLayer);
+    applySingleTileUpdate(
+        normalizeTileUpdate({ m: mapId, x, y, z, t: timestamp }) ?? { mapId, x, y, z, timestamp },
+        mainVisible,
+        overlayVisible
+    );
+
     return true;
 }
 
@@ -849,6 +1171,76 @@ export function jumpToMarker(markerId) {
 
 export function setHiddenMarkerTypes(types) {
     return MarkerManager.setHiddenMarkerTypes(types, mapInstance);
+}
+
+/**
+ * Enable or disable marker clustering for performance optimization
+ * @param {boolean} enabled - Whether clustering should be enabled
+ * @returns {boolean} - Success status
+ */
+export function setClusteringEnabled(enabled) {
+    if (!mapInstance) {
+        console.warn('[Leaflet] Cannot toggle clustering - map not initialized');
+        return false;
+    }
+
+    if (clusteringEnabled === enabled) {
+        console.log('[Leaflet] Clustering already', enabled ? 'enabled' : 'disabled');
+        return true; // No change needed
+    }
+
+    clusteringEnabled = enabled;
+
+    // Determine old and new layers for game markers
+    const oldMarkerLayer = enabled ? markerRegularLayer : markerClusterLayer;
+    const newMarkerLayer = enabled ? markerClusterLayer : markerRegularLayer;
+
+    // Determine old and new layers for custom markers
+    const oldCustomLayer = enabled ? customMarkerRegularLayer : customMarkerClusterLayer;
+    const newCustomLayer = enabled ? customMarkerClusterLayer : customMarkerRegularLayer;
+
+    // Move game markers from old to new layer
+    const markersList = [];
+    oldMarkerLayer.eachLayer(marker => {
+        markersList.push(marker);
+    });
+    markersList.forEach(marker => {
+        oldMarkerLayer.removeLayer(marker);
+        newMarkerLayer.addLayer(marker);
+    });
+
+    // Move custom markers from old to new layer
+    const customMarkersList = [];
+    oldCustomLayer.eachLayer(marker => {
+        customMarkersList.push(marker);
+    });
+    customMarkersList.forEach(marker => {
+        oldCustomLayer.removeLayer(marker);
+        newCustomLayer.addLayer(marker);
+    });
+
+    // Swap layers on the map
+    if (mapInstance.hasLayer(oldMarkerLayer)) {
+        mapInstance.removeLayer(oldMarkerLayer);
+    }
+    if (mapInstance.hasLayer(oldCustomLayer)) {
+        mapInstance.removeLayer(oldCustomLayer);
+    }
+    newMarkerLayer.addTo(mapInstance);
+    newCustomLayer.addTo(mapInstance);
+
+    // Update the global references
+    markerLayer = newMarkerLayer;
+    customMarkerLayer = newCustomLayer;
+
+    // Update the manager references
+    MarkerManager.setMarkerLayers(markerLayer, detailedMarkerLayer);
+    CustomMarkerManager.initializeCustomMarkerManager(customMarkerLayer, invokeDotNetSafe);
+
+    console.log('[Leaflet] Clustering', enabled ? 'enabled' : 'disabled',
+        '- moved', markersList.length, 'game markers and', customMarkersList.length, 'custom markers');
+
+    return true;
 }
 
 // Custom Marker Management - Delegate to CustomMarkerManager

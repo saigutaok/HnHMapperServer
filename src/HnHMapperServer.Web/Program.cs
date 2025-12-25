@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using System.Security.Claims;
@@ -437,8 +438,18 @@ app.MapGet("/map/updates", async (HttpContext context, IHttpClientFactory httpCl
         var apiClient = httpClientFactory.CreateClient("API");
         apiClient.Timeout = Timeout.InfiniteTimeSpan;
 
-        // Forward request to API service
-        var request = new HttpRequestMessage(HttpMethod.Get, "/map/updates");
+    // Forward request to API service.
+    //
+    // IMPORTANT:
+    // The browser SSE client may connect using query parameters (e.g. `?since=<token>`) to avoid
+    // re-downloading and re-parsing the entire initial tile cache on reconnect.
+    //
+    // If we drop the query string here, the API always thinks `since=0` and will resend the full
+    // tile cache snapshot (potentially ~300k tiles), which can freeze the browser for tens of seconds.
+    //
+    // Therefore we MUST forward the query string verbatim.
+    var requestUri = "/map/updates" + (context.Request.QueryString.HasValue ? context.Request.QueryString.Value : string.Empty);
+    var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Add("Accept", "text/event-stream");
 
         logger.LogWarning("[SSE Proxy] Sending request to API...");
@@ -478,6 +489,114 @@ app.MapGet("/map/updates", async (HttpContext context, IHttpClientFactory httpCl
     catch (Exception ex)
     {
         logger.LogError(ex, "[SSE Proxy] Exception while proxying SSE");
+        return Results.StatusCode(500);
+    }
+}).RequireAuthorization();
+
+// Grid IDs endpoint - queries database directly (like tile serving)
+app.MapGet("/map/api/v1/grids", async (
+    HttpContext context,
+    [FromQuery] int mapId,
+    [FromQuery] int minX,
+    [FromQuery] int maxX,
+    [FromQuery] int minY,
+    [FromQuery] int maxY,
+    HnHMapperServer.Infrastructure.Data.ApplicationDbContext db,
+    ILogger<Program> logger) =>
+{
+    if (!context.User.Identity?.IsAuthenticated ?? true)
+        return Results.Unauthorized();
+
+    // Extract tenant ID from claims (CRITICAL for global query filters to work)
+    var tenantId = context.User.FindFirst("TenantId")?.Value;
+    if (string.IsNullOrEmpty(tenantId))
+        return Results.Unauthorized();
+
+    // Store in context for ITenantContextAccessor (used by EF Core global query filters)
+    context.Items["TenantId"] = tenantId;
+
+    var hasMapAuth = context.User.Claims.Any(c =>
+        c.Type == AuthorizationConstants.ClaimTypes.TenantPermission &&
+        c.Value.Equals(Permission.Map.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+    if (!hasMapAuth)
+        return Results.Unauthorized();
+
+    // Limit bounds to prevent excessive queries
+    var maxRange = 50;
+    if (maxX - minX > maxRange || maxY - minY > maxRange)
+        return Results.BadRequest($"Coordinate range too large. Maximum {maxRange} tiles per dimension.");
+
+    try
+    {
+        var grids = await db.Grids
+            .AsNoTracking()
+            .Where(g => g.Map == mapId &&
+                       g.CoordX >= minX && g.CoordX <= maxX &&
+                       g.CoordY >= minY && g.CoordY <= maxY)
+            .Select(g => new { x = g.CoordX, y = g.CoordY, gridId = g.Id })
+            .ToListAsync();
+
+        return Results.Json(grids);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error fetching grid IDs for map {MapId}", mapId);
+        return Results.StatusCode(500);
+    }
+}).RequireAuthorization();
+
+// Single tile info endpoint - returns grid ID for a specific tile
+// NOTE: Using /api/tile-info instead of /map/api/v1/grid because Caddy routes /map/api/* to API service
+app.MapGet("/api/tile-info", async (
+    HttpContext context,
+    [FromQuery] int mapId,
+    [FromQuery] int x,
+    [FromQuery] int y,
+    HnHMapperServer.Infrastructure.Data.ApplicationDbContext db,
+    ILogger<Program> logger) =>
+{
+    if (!context.User.Identity?.IsAuthenticated ?? true)
+        return Results.Unauthorized();
+
+    var tenantId = context.User.FindFirst("TenantId")?.Value;
+    if (string.IsNullOrEmpty(tenantId))
+        return Results.Unauthorized();
+
+    context.Items["TenantId"] = tenantId;
+
+    var hasMapAuth = context.User.Claims.Any(c =>
+        c.Type == AuthorizationConstants.ClaimTypes.TenantPermission &&
+        c.Value.Equals(Permission.Map.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
+    if (!hasMapAuth)
+        return Results.Unauthorized();
+
+    try
+    {
+        logger.LogInformation("Fetching grid info for map {MapId} at ({X}, {Y}), tenant: {TenantId}",
+            mapId, x, y, tenantId);
+
+        var grid = await db.Grids
+            .AsNoTracking()
+            .Where(g => g.Map == mapId && g.CoordX == x && g.CoordY == y)
+            .Select(g => new {
+                x = g.CoordX,
+                y = g.CoordY,
+                gridId = g.Id,
+                mapId = g.Map,
+                nextUpdate = g.NextUpdate
+            })
+            .FirstOrDefaultAsync();
+
+        logger.LogInformation("Grid query result: {Result}", grid != null ? $"Found gridId={grid.gridId}" : "Not found");
+
+        if (grid == null)
+            return Results.NotFound();
+
+        return Results.Json(grid);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error fetching grid info for map {MapId} at ({X}, {Y})", mapId, x, y);
         return Results.StatusCode(500);
     }
 }).RequireAuthorization();

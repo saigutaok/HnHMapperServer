@@ -22,7 +22,7 @@ public class LayerVisibilityService
     /// <summary>
     /// Whether to show markers
     /// </summary>
-    private bool _showMarkers = true;
+    private bool _showMarkers = false;
 
     /// <summary>
     /// Whether to show thingwall markers
@@ -53,6 +53,11 @@ public class LayerVisibilityService
     /// Whether to show grid coordinates
     /// </summary>
     private bool _showGridCoordinates = false;
+
+    /// <summary>
+    /// Whether to cluster markers for performance
+    /// </summary>
+    private bool _showClustering = true;
 
     public LayerVisibilityService(ILogger<LayerVisibilityService> logger)
     {
@@ -142,6 +147,15 @@ public class LayerVisibilityService
         set => _showGridCoordinates = value;
     }
 
+    /// <summary>
+    /// Whether to cluster markers for performance
+    /// </summary>
+    public bool ShowClustering
+    {
+        get => _showClustering;
+        set => _showClustering = value;
+    }
+
     #endregion
 
     #region Layer Visibility Logic
@@ -200,7 +214,8 @@ public class LayerVisibilityService
             ShowQuests = _showQuests,
             ShowQuestTooltips = _showQuestTooltips,
             ShowCustomMarkers = _showCustomMarkers,
-            ShowGridCoordinates = _showGridCoordinates
+            ShowGridCoordinates = _showGridCoordinates,
+            ShowClustering = _showClustering
         };
     }
 
@@ -218,6 +233,7 @@ public class LayerVisibilityService
         _showQuestTooltips = config.ShowQuestTooltips;
         _showCustomMarkers = config.ShowCustomMarkers;
         _showGridCoordinates = config.ShowGridCoordinates;
+        _showClustering = config.ShowClustering;
     }
 
     #endregion
@@ -348,7 +364,7 @@ public class LayerVisibilityService
     {
         _showPlayers = true;
         _showPlayerTooltips = true;
-        _showMarkers = true;
+        _showMarkers = false;
         _showThingwalls = true;
         _showThingwallTooltips = false;
         _showQuests = true;
@@ -375,4 +391,5 @@ public class LayerVisibilityConfig
     public bool ShowQuestTooltips { get; set; }
     public bool ShowCustomMarkers { get; set; }
     public bool ShowGridCoordinates { get; set; }
+    public bool ShowClustering { get; set; } = true;
 }

@@ -82,8 +82,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private bool isLoaded = false;
     private bool hasMapPermission = false;
     private bool hasMarkersPermission = false;
+    private bool isTenantAdmin => state.TenantRole == "TenantAdmin" || state.TenantRole == "SuperAdmin";
     private bool isReconnecting = false;
     private bool circuitFullyReady = false;  // Prevents JS->NET calls during circuit initialization
+    private bool hiddenMarkerGroupsLoaded = false;  // Ensures filter state is loaded before markers
 
     private Timer? markerUpdateTimer;
     private Timer? permissionCheckTimer;
@@ -104,6 +106,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     // Hidden marker groups (by image path) - persisted to localStorage
     private HashSet<string> hiddenMarkerGroups = new();
     private const string HiddenMarkerGroupsStorageKey = "hiddenMarkerGroups";
+
+    // Floating button toggle states - persisted to localStorage
+    private const string ToggleStatesStorageKey = "mapToggleStates";
 
     #endregion
 
@@ -130,6 +135,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private bool showThingwallHighlight = false; // Thingwall highlighting (cyan) - off by default
     private bool showQuestGiverHighlight = false; // Quest giver highlighting (green) - off by default
     private bool showMarkerFilterMode = false; // Marker filter mode - off by default
+    private bool showClustering = true; // Marker clustering - on by default for performance
     private bool showRoads = true; // Roads visibility - on by default
     private int contextMenuX = 0;
     private int contextMenuY = 0;
@@ -157,6 +163,11 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private int mapActionCoordY = 0;
     private int mapActionX = 0;
     private int mapActionY = 0;
+
+    // Tile info dialog state
+    private bool showTileInfoDialog = false;
+    private TileInfoResult? tileInfoResult = null;
+    private bool tileInfoLoading = false;
 
     #endregion
 
@@ -275,6 +286,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
             MapNavigation.SetMaps(mapsList);
 
             state.Permissions = config.Permissions;
+            state.TenantRole = config.TenantRole ?? "";
 
             // Check permissions
             hasMapPermission = state.Permissions.Any(a => a.Equals(Permission.Map.ToClaimValue(), StringComparison.OrdinalIgnoreCase));
@@ -362,6 +374,10 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
                 // Load hidden marker groups from localStorage
                 await LoadHiddenMarkerGroupsAsync();
+                hiddenMarkerGroupsLoaded = true;
+
+                // Load floating button toggle states from localStorage
+                await LoadToggleStatesAsync();
 
                 // Load "my character" name from localStorage
                 await LoadMyCharacterAsync();
@@ -456,14 +472,17 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
             // No delay needed - this is called from HandleMapInitialized after Leaflet 'load' event
             // The map is guaranteed to be ready at this point (event-driven architecture)
 
-            // Load markers for current map
-            var markersToLoad = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+            // Load markers for current map (only if markers layer is enabled or marker filter mode is on)
+            if (LayerVisibility.ShowMarkers || showMarkerFilterMode)
+            {
+                var markersToLoad = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
 
-            // Enrich markers with timer data before adding to map
-            EnrichMarkersWithTimerData(markersToLoad);
+                // Enrich markers with timer data before adding to map
+                EnrichMarkersWithTimerData(markersToLoad);
 
-            // Batch add all markers in a single JS interop call for performance
-            await mapView.AddMarkersAsync(markersToLoad);
+                // Batch add all markers in a single JS interop call for performance
+                await mapView.AddMarkersAsync(markersToLoad);
+            }
 
             // Load custom markers
             await TryRenderPendingCustomMarkersAsync();
@@ -568,8 +587,8 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
                 // Update map view
                 if (mapView != null)
                 {
-                    // Batch add new markers for performance
-                    if (result.AddedMarkers.Count > 0)
+                    // Batch add new markers for performance (only if markers layer is enabled)
+                    if (result.AddedMarkers.Count > 0 && (LayerVisibility.ShowMarkers || showMarkerFilterMode))
                     {
                         await mapView.AddMarkersAsync(result.AddedMarkers);
                     }
@@ -746,11 +765,17 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         // This is event-driven (triggered by Leaflet 'load') instead of render-cycle polling
         if (mapView != null && MapNavigation.CurrentMapId > 0)
         {
-            // Sync hidden marker groups to JS before loading markers
-            if (hiddenMarkerGroups.Count > 0)
+            // Ensure hidden marker groups are loaded from localStorage BEFORE syncing to JS
+            // This fixes race condition where HandleMapInitialized fires before OnAfterRenderAsync completes
+            if (!hiddenMarkerGroupsLoaded)
             {
-                await mapView.SetHiddenMarkerTypesAsync(hiddenMarkerGroups);
+                await LoadHiddenMarkerGroupsAsync();
+                hiddenMarkerGroupsLoaded = true;
             }
+
+            // ALWAYS sync hidden marker groups to JS before loading markers
+            // (even if empty, to ensure JS state matches C# state)
+            await mapView.SetHiddenMarkerTypesAsync(hiddenMarkerGroups);
 
             Logger.LogInformation("Loading markers for map {MapId}", MapNavigation.CurrentMapId);
             await LoadMarkersForCurrentMapAsync();
@@ -764,6 +789,9 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         // 2. Leaflet 'load' event has fired, so all JS interop is ready
         // 3. circuitFullyReady should already be true from OnAfterRenderAsync
         await InitializeBrowserSseAsync();
+
+        // Apply loaded toggle states to JavaScript now that map is fully ready
+        await ApplyToggleStatesToJavaScriptAsync();
     }
 
     private Task HandleMapChanged(int mapId)
@@ -1193,9 +1221,25 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         state.ShowThingwallTooltips = LayerVisibility.ShowThingwallTooltips;
         state.ShowQuests = LayerVisibility.ShowQuests;
         state.ShowQuestTooltips = LayerVisibility.ShowQuestTooltips;
+        state.ShowClustering = LayerVisibility.ShowClustering;
 
         await SyncLayerVisibility();
         StateHasChanged();  // Force UI re-render
+    }
+
+    private async Task ToggleClustering()
+    {
+        showClustering = !showClustering;
+        LayerVisibility.ShowClustering = showClustering;
+        state.ShowClustering = showClustering;
+
+        if (mapView != null)
+        {
+            await mapView.SetClusteringEnabled(showClustering);
+        }
+
+        await SaveToggleStatesAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task HandleMarkerGroupVisibilityChanged((string ImageType, bool Visible) args)
@@ -1258,6 +1302,132 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to load hidden marker groups from localStorage");
+        }
+    }
+
+    private async Task SaveToggleStatesAsync()
+    {
+        try
+        {
+            var toggleStates = new Dictionary<string, bool>
+            {
+                ["showPClaim"] = showPClaim,
+                ["showVClaim"] = showVClaim,
+                ["showProvince"] = showProvince,
+                ["showThingwallHighlight"] = showThingwallHighlight,
+                ["showQuestGiverHighlight"] = showQuestGiverHighlight,
+                ["showMarkerFilterMode"] = showMarkerFilterMode,
+                ["showClustering"] = showClustering,
+                ["showRoads"] = showRoads
+            };
+            var json = JsonSerializer.Serialize(toggleStates, CamelCaseJsonOptions);
+            await SafeJs.SetLocalStorageAsync(ToggleStatesStorageKey, json);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to save toggle states to localStorage");
+        }
+    }
+
+    private async Task LoadToggleStatesAsync()
+    {
+        try
+        {
+            var json = await SafeJs.GetLocalStorageAsync(ToggleStatesStorageKey);
+            if (!string.IsNullOrEmpty(json))
+            {
+                var toggleStates = JsonSerializer.Deserialize<Dictionary<string, bool>>(json, CamelCaseJsonOptions);
+                if (toggleStates != null)
+                {
+                    if (toggleStates.TryGetValue("showPClaim", out var pclaim)) showPClaim = pclaim;
+                    if (toggleStates.TryGetValue("showVClaim", out var vclaim)) showVClaim = vclaim;
+                    if (toggleStates.TryGetValue("showProvince", out var province)) showProvince = province;
+                    if (toggleStates.TryGetValue("showThingwallHighlight", out var thingwall)) showThingwallHighlight = thingwall;
+                    if (toggleStates.TryGetValue("showQuestGiverHighlight", out var quest)) showQuestGiverHighlight = quest;
+                    if (toggleStates.TryGetValue("showMarkerFilterMode", out var filter)) showMarkerFilterMode = filter;
+                    if (toggleStates.TryGetValue("showClustering", out var clustering)) showClustering = clustering;
+                    if (toggleStates.TryGetValue("showRoads", out var roads)) showRoads = roads;
+
+                    Logger.LogDebug("Loaded toggle states from localStorage");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load toggle states from localStorage");
+        }
+    }
+
+    /// <summary>
+    /// Applies loaded toggle states to JavaScript after map is initialized.
+    /// Must be called after the map is ready for JS interop.
+    /// </summary>
+    private async Task ApplyToggleStatesToJavaScriptAsync()
+    {
+        try
+        {
+            leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
+
+            // Apply PClaim toggle (default is false, so only apply if true)
+            if (showPClaim)
+            {
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "ClaimFloor", true);
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "ClaimOutline", true);
+            }
+
+            // Apply VClaim toggle (default is false, so only apply if true)
+            if (showVClaim)
+            {
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "VillageFloor", true);
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "VillageOutline", true);
+            }
+
+            // Apply Province toggle (default is false, so only apply if true)
+            if (showProvince)
+            {
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province0", true);
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province1", true);
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province2", true);
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province3", true);
+                await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province4", true);
+            }
+
+            // Apply Thingwall highlight toggle (default is false, so only apply if true)
+            if (showThingwallHighlight)
+            {
+                await leafletModule.InvokeVoidAsync("setThingwallHighlightEnabled", true);
+            }
+
+            // Apply Quest giver highlight toggle (default is false, so only apply if true)
+            if (showQuestGiverHighlight)
+            {
+                await leafletModule.InvokeVoidAsync("setQuestGiverHighlightEnabled", true);
+            }
+
+            // Apply Marker filter mode toggle (default is false, so only apply if true)
+            if (showMarkerFilterMode)
+            {
+                await leafletModule.InvokeVoidAsync("setMarkerFilterModeEnabled", true);
+            }
+
+            // Apply Clustering toggle (default is true, so only apply if false)
+            if (!showClustering && mapView != null)
+            {
+                await mapView.SetClusteringEnabled(false);
+            }
+
+            // Apply Roads toggle (default is true, so only apply if false)
+            if (!showRoads)
+            {
+                await leafletModule.InvokeVoidAsync("toggleRoads", false);
+            }
+
+            Logger.LogDebug("Applied toggle states to JavaScript: PClaim={PClaim}, VClaim={VClaim}, Province={Province}, Thingwall={Thingwall}, Quest={Quest}, Filter={Filter}, Clustering={Clustering}, Roads={Roads}",
+                showPClaim, showVClaim, showProvince, showThingwallHighlight, showQuestGiverHighlight, showMarkerFilterMode, showClustering, showRoads);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to apply toggle states to JavaScript");
         }
     }
 
@@ -1503,18 +1673,19 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
     private void HandleTileUpdates(List<TileUpdate> updates)
     {
         if (mapView == null) return;
+        if (updates == null || updates.Count == 0) return;
 
         _ = InvokeAsync(async () =>
         {
             try
             {
+                // IMPORTANT:
+                // Tile updates can arrive in very large bursts (e.g. when the tab was backgrounded and then
+                // returns to foreground). Doing a JS interop call per tile can completely freeze the UI.
+                //
+                // We forward the batch to JS once; the JS side deduplicates and time-slices processing.
                 if (mapView != null)
-                {
-                    foreach (var update in updates)
-                    {
-                        await mapView.RefreshTileAsync(update.M, update.X, update.Y, update.Z, update.T);
-                    }
-                }
+                    await mapView.ApplyTileUpdatesAsync(updates);
             }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
@@ -1784,57 +1955,26 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         {
             isReconnecting = false;
 
-            Logger.LogInformation("Circuit reconnected - rehydrating state");
+            Logger.LogInformation("Circuit reconnected");
 
+            // Resume marker update timer
             markerUpdateTimer?.Change(60000, 60000);
 
+            // SSE handles reconnection internally (checks if already connected)
             if (sseModule != null && sseDotnetRef != null)
             {
                 try
                 {
                     await sseModule.InvokeVoidAsync("initializeSseUpdates", sseDotnetRef);
-                    Logger.LogInformation("Browser SSE reconnected after circuit recovery");
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogWarning(ex, "Failed to reconnect browser SSE after circuit recovery");
+                    Logger.LogWarning(ex, "Failed to reconnect browser SSE");
                 }
             }
 
-            if (mapView != null)
-            {
-                try
-                {
-                    await mapView.ChangeMapAsync(MapNavigation.CurrentMapId);
-
-                    // Diagnostic: Log if this was attempting to restore view (could cause zoom resets)
-                    Logger.LogWarning("Circuit reconnection - NOT restoring view position. Previous coords: ({X},{Y}) zoom {Zoom}",
-                        MapNavigation.CenterX, MapNavigation.CenterY, MapNavigation.Zoom);
-
-                    // REMOVED: await mapView.SetViewAsync(...) - This was causing random zoom resets
-                    // User's current view position should be preserved by Leaflet across circuit reconnections
-
-                    if (MapNavigation.OverlayMapId.HasValue)
-                    {
-                        await mapView.SetOverlayMapAsync(MapNavigation.OverlayMapId);
-                    }
-
-                    foreach (var map in MapNavigation.Maps)
-                    {
-                        await mapView.SetMapRevisionAsync(map.ID, map.MapInfo.Revision);
-                    }
-
-                    Logger.LogInformation("Map state rehydrated successfully");
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to rehydrate map state after reconnect");
-                }
-            }
-
-            CustomMarkerState.MarkAsNeedingRender();
-            await TryRenderPendingCustomMarkersAsync();
-
+            // JavaScript state (Leaflet map, markers, tiles) is preserved across circuit reconnects
+            // No need to re-push everything to JS - just notify success
             Snackbar.Add("Reconnected successfully", Severity.Success);
             StateHasChanged();
         });
@@ -1940,11 +2080,15 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
 
         await mapView.ClearAllMarkersAsync();
 
-        var markers = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
-        EnrichMarkersWithTimerData(markers);
+        // Only add markers if they should be visible
+        if (LayerVisibility.ShowMarkers || showMarkerFilterMode)
+        {
+            var markers = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+            EnrichMarkersWithTimerData(markers);
 
-        // Batch add all markers in a single JS interop call for performance
-        await mapView.AddMarkersAsync(markers);
+            // Batch add all markers in a single JS interop call for performance
+            await mapView.AddMarkersAsync(markers);
+        }
     }
 
     /// <summary>
@@ -2469,6 +2613,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "ClaimFloor", showPClaim);
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "ClaimOutline", showPClaim);
+        await SaveToggleStatesAsync();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -2478,6 +2623,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "VillageFloor", showVClaim);
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "VillageOutline", showVClaim);
+        await SaveToggleStatesAsync();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -2490,6 +2636,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province2", showProvince);
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province3", showProvince);
         await leafletModule.InvokeVoidAsync("setOverlayTypeEnabled", "Province4", showProvince);
+        await SaveToggleStatesAsync();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -2501,6 +2648,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         if (success)
         {
             showThingwallHighlight = newState;
+            await SaveToggleStatesAsync();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -2513,6 +2661,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         if (success)
         {
             showQuestGiverHighlight = newState;
+            await SaveToggleStatesAsync();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -2525,6 +2674,16 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         if (success)
         {
             showMarkerFilterMode = newState;
+
+            // If enabling filter mode and markers aren't shown, load them so there's something to filter
+            if (newState && !LayerVisibility.ShowMarkers && mapView != null)
+            {
+                var markersToLoad = MarkerState.GetMarkersForMap(MapNavigation.CurrentMapId).ToList();
+                EnrichMarkersWithTimerData(markersToLoad);
+                await mapView.AddMarkersAsync(markersToLoad);
+            }
+
+            await SaveToggleStatesAsync();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -2534,6 +2693,7 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         showRoads = !showRoads;
         leafletModule ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./js/leaflet-interop.js{JsVersion}");
         await leafletModule.InvokeVoidAsync("toggleRoads", showRoads);
+        await SaveToggleStatesAsync();
         await InvokeAsync(StateHasChanged);
     }
 
@@ -2987,6 +3147,76 @@ public partial class Map : IAsyncDisposable, IBrowserViewportObserver
         showMapActionMenu = false;
         await JsCreatePing(mapActionMapId, mapActionCoordX, mapActionCoordY, mapActionX, mapActionY);
     }
+
+    private async Task HandleDeleteTileFromMenu()
+    {
+        showMapActionMenu = false;
+
+        try
+        {
+            var success = await MapData.WipeTileAsync(mapActionMapId, mapActionCoordX, mapActionCoordY);
+            if (success)
+            {
+                Snackbar.Add($"Tile ({mapActionCoordX}, {mapActionCoordY}) deleted", Severity.Success);
+                // Force map refresh
+                if (mapView != null)
+                {
+                    await mapView.RefreshTilesAsync();
+                }
+            }
+            else
+            {
+                Snackbar.Add("Failed to delete tile", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete tile at ({X}, {Y})", mapActionCoordX, mapActionCoordY);
+            Snackbar.Add("Failed to delete tile", Severity.Error);
+        }
+    }
+
+    private async Task HandleShowTileInfo()
+    {
+        showMapActionMenu = false;
+        tileInfoLoading = true;
+        showTileInfoDialog = true;
+        tileInfoResult = null;
+        StateHasChanged();
+
+        try
+        {
+            var url = $"/api/tile-info?mapId={mapActionMapId}&x={mapActionCoordX}&y={mapActionCoordY}";
+            Logger.LogInformation("Fetching tile info from: {Url}", url);
+
+            // Use JS fetch to call the Web service endpoint directly
+            tileInfoResult = await JS.InvokeAsync<TileInfoResult?>("fetchTileInfo", url);
+            Logger.LogInformation("Fetched tile info: GridId={GridId}, MapId={MapId}",
+                tileInfoResult?.GridId, tileInfoResult?.MapId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to fetch tile info for ({X}, {Y})", mapActionCoordX, mapActionCoordY);
+        }
+        finally
+        {
+            tileInfoLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        Snackbar.Add("Copied to clipboard", Severity.Info);
+    }
+
+    private record TileInfoResult(
+        [property: System.Text.Json.Serialization.JsonPropertyName("x")] int X,
+        [property: System.Text.Json.Serialization.JsonPropertyName("y")] int Y,
+        [property: System.Text.Json.Serialization.JsonPropertyName("gridId")] string GridId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("mapId")] int MapId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("nextUpdate")] DateTime NextUpdate);
 
     /// <summary>
     /// Creates a ping at the specified location (called from JavaScript Alt+M shortcut or context menu)
