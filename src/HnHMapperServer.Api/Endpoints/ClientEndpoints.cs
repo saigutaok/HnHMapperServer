@@ -157,13 +157,8 @@ public static partial class ClientEndpoints
             return Results.Unauthorized();
         }
 
-        // Check if grid updates are allowed for this tenant
+        // Get config for later use
         var config = await configRepository.GetConfigAsync();
-        if (!config.AllowGridUpdates)
-        {
-            logger.LogWarning("GridUpload: Grid updates are disabled for tenant {TenantId}", tenantId);
-            return Results.Json(new { error = "Grid updates are disabled for this tenant" }, statusCode: 403);
-        }
 
         // Record tenant activity
         activityService.RecordActivity(tenantId);
@@ -231,6 +226,18 @@ public static partial class ClientEndpoints
         {
             // Grid doesn't exist for current tenant
             return Results.BadRequest($"Unknown grid id: {id}");
+        }
+
+        // Check if tile updates are allowed (only block if tile already exists)
+        if (!config.AllowGridUpdates)
+        {
+            var existingTile = await tileService.GetTileAsync(grid.Map, grid.Coord, 0);
+            if (existingTile != null && !string.IsNullOrEmpty(existingTile.File))
+            {
+                logger.LogWarning("GridUpload: Tile update blocked for grid {GridId} - updates disabled for tenant {TenantId}", id, tenantId);
+                return Results.Json(new { error = "Tile updates are disabled for this tenant" }, statusCode: 403);
+            }
+            // No existing tile - allow new tile upload
         }
 
         var gridStorage = configuration["GridStorage"] ?? "map";
