@@ -317,7 +317,7 @@ builder.Services.AddRateLimiter(options =>
             partitionKey: tenantId,
             factory: _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 500,              // 100 requests per minute
+                PermitLimit = 5000,
                 Window = TimeSpan.FromMinutes(1),
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                 QueueLimit = 10
