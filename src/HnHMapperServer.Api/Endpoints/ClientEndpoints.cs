@@ -87,8 +87,6 @@ public static partial class ClientEndpoints
         ITokenService tokenService,
         IGridService gridService,
         IConfiguration configuration,
-        HnHMapperServer.Api.Services.MapRevisionCache revisionCache,
-        IUpdateNotificationService updateNotificationService,
         ITenantActivityService activityService,
         ILogger<Program> logger)
     {
@@ -121,10 +119,6 @@ public static partial class ClientEndpoints
             return Results.Json(new { error = ex.Message }, statusCode: 403);
         }
 
-        // Bump map revision and notify clients to invalidate cache
-        var newRevision = revisionCache.Increment(response.Map);
-        updateNotificationService.NotifyMapRevision(response.Map, newRevision);
-        logger.LogDebug("GridUpdate: Bumped revision for map {MapId} to {Revision}", response.Map, newRevision);
 
         return Results.Json(response);
     }
@@ -138,8 +132,6 @@ public static partial class ClientEndpoints
         ITileService tileService,
         TileCacheService tileCacheService,
         IConfiguration configuration,
-        HnHMapperServer.Api.Services.MapRevisionCache revisionCache,
-        IUpdateNotificationService updateNotificationService,
         IStorageQuotaService quotaService,
         ITenantFilePathService filePathService,
         ITenantActivityService activityService,
@@ -157,13 +149,8 @@ public static partial class ClientEndpoints
             return Results.Unauthorized();
         }
 
-        // Check if grid updates are allowed for this tenant
+        // Get config for later use
         var config = await configRepository.GetConfigAsync();
-        if (!config.AllowGridUpdates)
-        {
-            logger.LogWarning("GridUpload: Grid updates are disabled for tenant {TenantId}", tenantId);
-            return Results.Json(new { error = "Grid updates are disabled for this tenant" }, statusCode: 403);
-        }
 
         // Record tenant activity
         activityService.RecordActivity(tenantId);
@@ -231,6 +218,18 @@ public static partial class ClientEndpoints
         {
             // Grid doesn't exist for current tenant
             return Results.BadRequest($"Unknown grid id: {id}");
+        }
+
+        // Check if tile updates are allowed (only block if tile already exists)
+        if (!config.AllowGridUpdates)
+        {
+            var existingTile = await tileService.GetTileAsync(grid.Map, grid.Coord, 0);
+            if (existingTile != null && !string.IsNullOrEmpty(existingTile.File))
+            {
+                logger.LogWarning("GridUpload: Tile update blocked for grid {GridId} - updates disabled for tenant {TenantId}", id, tenantId);
+                return Results.Json(new { error = "Tile updates are disabled for this tenant" }, statusCode: 403);
+            }
+            // No existing tile - allow new tile upload
         }
 
         var gridStorage = configuration["GridStorage"] ?? "map";
@@ -330,12 +329,6 @@ public static partial class ClientEndpoints
                 await tileService.UpdateZoomLevelAsync(grid.Map, c, z, tenantId, gridStorage);
             }
 
-            // Bump map revision and notify clients to invalidate cache
-            var newRevision = revisionCache.Increment(grid.Map);
-            updateNotificationService.NotifyMapRevision(grid.Map, newRevision);
-            logger.LogDebug("GridUpload: Bumped revision for map {MapId} to {Revision}", grid.Map, newRevision);
-
-            // Invalidate tile cache for current tenant (tiles were modified - SSE clients need fresh data)
             await tileCacheService.InvalidateCacheAsync(tenantId);
         }
 
